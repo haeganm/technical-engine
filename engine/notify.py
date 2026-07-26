@@ -103,8 +103,10 @@ def send_batch(alerts: list, url: str, sleep=time.sleep) -> list:
 def dispatch(alerts: list, sent: set, send_fn) -> list:
     """Send alerts not already sent this session. `send_fn(batch) -> delivered`.
 
-    Only delivered alerts join `sent`, so a failed POST is retried next cycle
-    instead of being silently swallowed and permanently suppressed.
+    Only delivered alerts join `sent`, so a failed POST leaves the ticker
+    eligible again. Note that the same BAR will not be re-judged (the scan has
+    moved on), so a refused alert is effectively lost for that bar -- which is
+    why the caller journals what was generated, not just what was delivered.
     """
     fresh, seen = [], set()
     for a in alerts:

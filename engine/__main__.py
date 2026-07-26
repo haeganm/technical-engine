@@ -118,9 +118,15 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
         fired = alerts
     else:
         fired = notify.dispatch(alerts, sent, lambda batch: notify.send_batch(batch, url))
-        journal.append(fired)
+        # journal everything generated, flagging delivery: an alert Discord
+        # refused is never regenerated (the bar has passed), so recording only
+        # delivered ones would bias the win rate toward what the webhook liked
+        journal.append(alerts, delivered={a.key() for a in fired})
         for a in fired:
             log.info("ALERT %s", _describe(a))
+        undelivered = len(alerts) - len(fired)
+        if undelivered:
+            log.warning("%d alert(s) generated but not delivered", undelivered)
 
     at_as_of = sum(1 for df in stored.values()
                    if len(df) and df.index[-1] == as_of)
@@ -302,8 +308,19 @@ def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE,
           "At 1:1 reward:risk you need >50% plus costs to break even.")
 
 
-def cmd_report(name: str = journal.LIVE, by: str = "signal") -> None:
-    print(journal.format_stats(journal.stats(name, by=by)))
+def cmd_report(by: str = "signal", interval: str = "5m", replay: bool = False) -> None:
+    """Hit rates from a journal, scored against the MATCHING bar store.
+
+    The store must match the interval: scoring hourly alerts against 5m bars
+    (the old default) silently produces garbage.
+    """
+    p = config.INTERVALS[interval]
+    name = p["replay"] if replay else journal.LIVE
+    df = journal.stats(name, by=by, bars=data.load(p["store"]))
+    if df.empty:
+        print(f"No resolved alerts in {name!r} yet.")
+        return
+    print(journal.format_stats(df))
 
 
 def cmd_test_webhook() -> None:
@@ -351,6 +368,9 @@ def main(argv=None) -> None:
 
     rep = sub.add_parser("report", help="hit rates from the live journal")
     rep.add_argument("--by", default="signal", choices=["signal", "score", "ticker"])
+    rep.add_argument("--interval", default="5m", choices=list(config.INTERVALS))
+    rep.add_argument("--replay", action="store_true",
+                     help="score the backtest journal instead of the live one")
 
     srv = sub.add_parser("serve", help="local results dashboard")
     srv.add_argument("--port", type=int, default=8765)
@@ -368,7 +388,7 @@ def main(argv=None) -> None:
     elif a.cmd == "backtest":
         cmd_backtest(a.days, a.min_score, interval=a.interval)
     elif a.cmd == "report":
-        cmd_report(by=a.by)
+        cmd_report(by=a.by, interval=a.interval, replay=a.replay)
     elif a.cmd == "serve":
         from .server import serve
         serve(a.port)

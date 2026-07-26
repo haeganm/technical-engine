@@ -27,7 +27,15 @@ KEYS = ["session_date", "ticker"]  # one journaled call per ticker per session
 LIVE, REPLAY = "journal", "journal_replay"
 
 
-def append(alerts, name: str = LIVE) -> None:
+def append(alerts, name: str = LIVE, delivered: set | None = None) -> None:
+    """Journal every alert the scanner GENERATED, flagging which ones Discord
+    accepted.
+
+    Journaling only the delivered ones would quietly drop exactly the alerts
+    the webhook refused out of the win-rate denominator -- measuring the
+    channel instead of the signals. `delivered=None` means "all of them"
+    (backtests, where there is no webhook).
+    """
     if not alerts:
         return
     now = pd.Timestamp.now(tz=config.ET).round("s")
@@ -37,6 +45,7 @@ def append(alerts, name: str = LIVE) -> None:
         "price": a.price, "stop": a.stop,
         "target_1r": a.target_1r, "target_2r": a.target_2r,
         "rvol": a.rvol, "atr": a.atr, "created_at": now,
+        "delivered": True if delivered is None else (a.key() in delivered),
     } for a in alerts])
     old = data.load(name)
     df = pd.concat([old, new], ignore_index=True) if old is not None else new
@@ -46,11 +55,18 @@ def append(alerts, name: str = LIVE) -> None:
 
 
 def sent_keys(session_date: str, name: str = LIVE) -> set[tuple]:
-    """Seed the in-memory dedupe set on restart so we never re-notify."""
+    """Seed the in-memory dedupe set on restart so we never re-notify.
+
+    Only DELIVERED alerts suppress a retry -- a journaled-but-undelivered one
+    must stay eligible. (Journals written before the column existed predate
+    that distinction and were delivered by definition.)
+    """
     j = data.load(name)
     if j is None or j.empty:
         return set()
     j = j[j["session_date"] == session_date]
+    if "delivered" in j.columns:
+        j = j[j["delivered"].fillna(True).astype(bool)]
     return set(map(tuple, j[KEYS].to_numpy()))
 
 

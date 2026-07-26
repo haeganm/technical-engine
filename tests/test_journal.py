@@ -78,6 +78,24 @@ def test_append_is_idempotent_and_keeps_the_first_call():
     assert len(j) == 1 and j.iloc[0]["price"] == 100.0
 
 
+def test_undelivered_alerts_are_journaled_but_stay_eligible():
+    """Regression: only delivered alerts were journaled, so every alert Discord
+    refused vanished from the win-rate denominator -- measuring the webhook
+    rather than the signals."""
+    a, b = _alert(ticker="AAA"), _alert(ticker="BBB")
+    journal.append([a, b], delivered={a.key()})
+    j = data.load(journal.LIVE)
+    assert len(j) == 2, "both generated alerts must be recorded"
+    assert set(j[j["delivered"]]["ticker"]) == {"AAA"}
+    # only the delivered one suppresses a retry
+    assert journal.sent_keys("2026-07-24") == {("2026-07-24", "AAA")}
+
+
+def test_backtest_append_marks_everything_delivered():
+    journal.append([_alert()], journal.REPLAY)
+    assert data.load(journal.REPLAY)["delivered"].all()
+
+
 def test_sent_keys_round_trip():
     journal.append([_alert(ticker="AAA"), _alert(ticker="BBB")])
     assert journal.sent_keys("2026-07-24") == {("2026-07-24", "AAA"), ("2026-07-24", "BBB")}

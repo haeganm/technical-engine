@@ -40,9 +40,13 @@ INTERVALS = {
                prev_session_min_bars=60, keep_days=3650, fetch_period="60d",
                store="bars", replay="journal_replay",
                squeeze_bars=20, thrust_bars=3,
-               # signals whose windows cannot be made meaningful at this
-               # interval; empty here, see the 1h profile
-               disabled=()),
+               # Retired signals. Measured over 60 sessions, these two were the
+               # worst in BOTH halves of the sample -- the only non-overfit
+               # criterion available, since H1 win rates do not transfer:
+               #   squeeze_breakout  45.1% / 42.0%
+               #   hod_breakout      46.7% / 44.5%
+               # The code and tests stay; clear this tuple to re-measure them.
+               disabled=("squeeze_breakout", "hod_breakout")),
     # A 7-bar hourly session cannot host a 20-bar coil or a 3-bar thrust that
     # still leaves room for the opening drive, so both are disabled rather than
     # left to compute something meaningless and report it as evidence.
@@ -50,7 +54,7 @@ INTERVALS = {
                prev_session_min_bars=5, keep_days=440, fetch_period="440d",
                store="bars_1h", replay="journal_replay_1h",
                squeeze_bars=4, thrust_bars=2,
-               disabled=("squeeze_breakout",)),
+               disabled=("squeeze_breakout", "hod_breakout")),
 }
 LIVE = INTERVALS["5m"]
 
@@ -89,7 +93,11 @@ RVOL_MIN_SAMPLES = 3    # deprecated: RVOL_LOOKBACK_SESSIONS is now both the win
 RVOL_LOOKBACK_SESSIONS = 10
 STRONG_RVOL = 3.0       # score point: exceptional volume
 STRONG_CLOSE = 0.6      # score point: closed in the top 40% of the bar's range
-MIN_SCORE = 2           # of 6 possible points -- tune with `backtest --min-score`
+# Of 6 possible points. Chosen for ALERT VOLUME (~76/day), not for edge: a grid
+# over signal sets x threshold showed every option in the 50-100/day band lands
+# at 44.5-45.3% out-of-sample, so the choice buys selectivity, not a better win
+# rate. Re-derive with `backtest --min-score N`.
+MIN_SCORE = 4
 
 # ---------------------------------------------------------------- risk
 MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
