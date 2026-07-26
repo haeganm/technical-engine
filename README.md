@@ -19,18 +19,16 @@ rather than to hide it. Day trading is risky; most day traders lose money.
 ## Does it work?
 
 No. Run `python -m engine backtest` yourself, or browse it in `python -m engine
-serve`. Over **60 sessions** of 5m bars across 506 tickers (2026-04-29 to
-2026-07-24), 10,118 alerts at the pre-tuning threshold:
+serve`. **The shipped configuration**, over 60 sessions of 5m bars across 506
+tickers (2026-04-29 to 2026-07-24) — 5,400 alerts, 90/day:
 
 | signal | decided | win rate | first half | second half |
 |---|---|---|---|---|
-| gap_go | 169 | 54.4% | 54.0% | 55.1% |
-| vwap_reclaim | 2,770 | 49.9% | 53.9% | 45.9% |
-| orb_breakout | 1,762 | 49.0% | 51.2% | 46.3% |
-| momentum_thrust | 1,079 | 48.1% | 51.0% | 45.5% |
-| ema9_vwap_pullback | 2,014 | 46.5% | 47.2% | 46.3% |
-| hod_breakout *(retired)* | 968 | 45.6% | 46.7% | 44.5% |
-| squeeze_breakout *(retired)* | 387 | 43.7% | 45.1% | 42.0% |
+| gap_go | 130 | 56.9% | 56.4% | **57.7%** |
+| vwap_reclaim | 965 | 50.1% | 54.2% | 45.8% |
+| orb_breakout | 1,463 | 48.4% | 52.1% | 44.0% |
+| momentum_thrust | 991 | 46.3% | 49.9% | 42.5% |
+| ema9_vwap_pullback | 1,352 | 45.6% | 48.3% | 43.7% |
 
 At 1:1 reward:risk you need **more than 50% plus costs** to break even. Three
 things were tested and each came back negative:
@@ -47,10 +45,17 @@ things were tested and each came back negative:
   noise; selecting on it is exactly how a backtest lies to you, which is why
   `backtest` prints a stability table under every other number.
 
-The two weakest signals in *both* halves were retired on that basis (the only
-non-overfit criterion available). `gap_go` is the sole setup above 50% in both
-halves, but at ~3 alerts/day and 169 decided trades it is too thin to build on
-— interesting, not proven.
+Two signals — `hod_breakout` (46.7% / 44.5%) and `squeeze_breakout` (45.1% /
+42.0%) — were retired for being worst in *both* halves, the only non-overfit
+criterion available. Fixing `squeeze_breakout`'s session-boundary bug made it
+measurably worse (47.6% → 43.7%): it had been scoring overnight gaps, not
+volatility coils.
+
+`gap_go` is the one setup that is above 50% in both halves and barely moves
+between them (+1.3%). At ~2 alerts/day and 130 decided trades it is far too
+thin to build on — interesting, not proven. Everything else decays into the
+second half by 4–8 points, which is one regime effect rather than four
+independent failures.
 
 Treat the alerts as *"go look at this chart now"*, never as trade instructions.
 
@@ -71,7 +76,7 @@ but **retired**: they measured worst in both halves of the sample. Clear
 Signals describe **structure only**. Every alert must additionally clear a
 central gate — relative volume ≥2× its own time-of-day normal, and price above
 VWAP — and score enough of 6 confirmations (threshold in `config.MIN_SCORE`,
-currently 4, chosen for ~76 alerts/day rather than for edge):
+currently 4, chosen for ~90 alerts/day rather than for edge):
 
 - up on the day
 - RVOL ≥ 3×
@@ -93,14 +98,16 @@ Webhooks → New Webhook → Copy URL).
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 copy .env.example .env         :: paste your webhook URL into .env
-.venv\Scripts\python -m engine fetch --period 60d
+.venv\Scripts\python -m engine fetch
 .venv\Scripts\python -m engine test-webhook
 ```
 
-The `fetch --period 60d` step is not optional. Relative volume is measured
-against prior sessions at the same time of day, so **a fresh clone with an
-empty store produces zero alerts** until it has more than 3 sessions of
-history. That is by design, not a bug.
+The `fetch` step is not optional. Relative volume is measured against the same
+time of day on the previous 10 sessions, so **a fresh clone with an empty store
+produces zero alerts** until it has that much history — the baseline returns
+NaN rather than a number computed from too few samples. That is by design: a
+partial window would give a different answer depending on how much history
+happened to be loaded. The default `fetch` pulls Yahoo's full ~60 days.
 
 ## Run
 
@@ -118,10 +125,10 @@ python -m engine run [--once] [--dry-run]   scan loop; --dry-run never posts
 python -m engine fetch [--interval 1h]      refresh a bar store (5m or 1h)
 python -m engine backtest [--interval 1h] [--days 200]
 python -m engine replay 2026-07-24          print one past session's alerts
-python -m engine report [--by score]        hit rates from the live journal
+python -m engine report [--by score] [--replay]  hit rates from a journal
 python -m engine serve [--port 8765]        results dashboard at localhost:8765
 python -m engine test-webhook               post dummy alerts to Discord
-pytest                                      97 tests, offline, ~60s
+pytest                                      99 tests, offline, ~60s
 ```
 
 ## Dashboard

@@ -93,11 +93,11 @@ RVOL_MIN_SAMPLES = 3    # deprecated: RVOL_LOOKBACK_SESSIONS is now both the win
 RVOL_LOOKBACK_SESSIONS = 10
 STRONG_RVOL = 3.0       # score point: exceptional volume
 STRONG_CLOSE = 0.6      # score point: closed in the top 40% of the bar's range
-# Of 6 possible points. Chosen for ALERT VOLUME (~76/day), not for edge: a grid
-# over signal sets x threshold showed every option in the 50-100/day band lands
-# at 44.5-45.3% out-of-sample, so the choice buys selectivity, not a better win
+# Of 6 possible points. Chosen for ALERT VOLUME, not for edge: a grid over
+# signal sets x threshold showed every option in the 50-100/day band lands at
+# 44.5-45.3% out-of-sample, so the choice buys selectivity, not a better win
 # rate. Re-derive with `backtest --min-score N`.
-MIN_SCORE = 4
+MIN_SCORE = 4          # measured: 90 alerts/day, 47.2% win (43.9% second half)
 
 # ---------------------------------------------------------------- risk
 MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
