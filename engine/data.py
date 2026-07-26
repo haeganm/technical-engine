@@ -84,8 +84,8 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame | None:
 
 
 def fetch_intraday(tickers: list[str], interval: str = config.INTERVAL,
-                   period: str = config.PERIOD,
-                   now: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
+                   period: str = config.PERIOD, now: pd.Timestamp | None = None,
+                   bar_minutes: int = config.BAR_MINUTES) -> dict[str, pd.DataFrame]:
     """One batched download; returns {ticker: OHLCV frame, ET index, closed bars}."""
     now = now if now is not None else pd.Timestamp.now(tz=config.ET)
     raw = yf.download(tickers, interval=interval, period=period, group_by="ticker",
@@ -111,7 +111,7 @@ def fetch_intraday(tickers: list[str], interval: str = config.INTERVAL,
         idx = pd.DatetimeIndex(df.index)
         idx = idx.tz_localize("UTC") if idx.tz is None else idx
         df.index = idx.tz_convert(config.ET)
-        df = complete_bars(df, now)
+        df = complete_bars(df, now, bar_minutes=bar_minutes)
         if df is not None and len(df):
             frames[t] = df
     missing = len(tickers) - len(frames)
@@ -122,7 +122,8 @@ def fetch_intraday(tickers: list[str], interval: str = config.INTERVAL,
 
 # ---------------------------------------------------------------- store <-> frames
 
-def store_bars(frames: dict[str, pd.DataFrame], now: pd.Timestamp | None = None) -> int:
+def store_bars(frames: dict[str, pd.DataFrame], now: pd.Timestamp | None = None,
+               store: str = "bars", keep_days: int = config.KEEP_DAYS) -> int:
     now = now if now is not None else pd.Timestamp.now(tz=config.ET)
     rows = []
     for t, df in frames.items():
@@ -130,14 +131,15 @@ def store_bars(frames: dict[str, pd.DataFrame], now: pd.Timestamp | None = None)
         r.insert(1, "ticker", t)
         rows.append(r)
     new = pd.concat(rows, ignore_index=True) if rows else None
-    cutoff = now - pd.Timedelta(days=config.KEEP_DAYS)
-    return merge_save("bars", new, keys=["ticker", "ts"], cutoff=cutoff)
+    cutoff = now - pd.Timedelta(days=keep_days)
+    return merge_save(store, new, keys=["ticker", "ts"], cutoff=cutoff)
 
 
-def load_frames(upto: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
+def load_frames(upto: pd.Timestamp | None = None,
+                store: str = "bars") -> dict[str, pd.DataFrame]:
     """Rebuild per-ticker frames from the store. This is what both the live
     scan and the backtest read, so they see identical history."""
-    df = load("bars")
+    df = load(store)
     if df is None or df.empty:
         return {}
     if upto is not None:
@@ -150,9 +152,9 @@ def load_frames(upto: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
     return out
 
 
-def store_sessions() -> int:
+def store_sessions(store: str = "bars") -> int:
     """Distinct trading dates in the store -- warm-up readout."""
-    df = load("bars")
+    df = load(store)
     if df is None or df.empty:
         return 0
     return int(pd.DatetimeIndex(df["ts"]).tz_convert(config.ET).normalize().nunique())

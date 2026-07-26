@@ -13,8 +13,9 @@ rather than to hide it. Day trading is risky; most day traders lose money.
 
 ## Does it work?
 
-Run `python -m engine backtest` yourself. Over 41 sessions (2026-05-27 to
-2026-07-24), 869 alerts, ~21/day:
+Run `python -m engine backtest` yourself, or browse it in `python -m engine
+serve`. Over 41 sessions of 5m bars (2026-05-27 to 2026-07-24), 869 alerts,
+~21/day — cumulative result **−40R**:
 
 | signal | decided | win rate | first half | second half |
 |---|---|---|---|---|
@@ -88,13 +89,33 @@ configuration error. Or run it directly with `python -m engine run`.
 
 ```
 python -m engine run [--once] [--dry-run]   scan loop; --dry-run never posts
-python -m engine fetch [--period 60d]       refresh the local bar store
-python -m engine backtest [--days N]        score every stored session
+python -m engine fetch [--interval 1h]      refresh a bar store (5m or 1h)
+python -m engine backtest [--interval 1h] [--days 200]
 python -m engine replay 2026-07-24          print one past session's alerts
 python -m engine report [--by score]        hit rates from the live journal
+python -m engine serve [--port 8765]        results dashboard at localhost:8765
 python -m engine test-webhook               post dummy alerts to Discord
-pytest                                      69 tests, offline, ~35s
+pytest                                      81 tests, offline, ~40s
 ```
+
+## Dashboard
+
+`python -m engine serve` opens a local, read-only dashboard (no accounts, no
+external requests — the chart library is vendored): cumulative-R equity curve,
+win-rate tiles, per-signal and stability tables, and a click-through candlestick
+chart for every alert with VWAP and the entry/stop/1R/2R levels drawn on it.
+
+## The two backtest tiers
+
+- **5m** (`backtest`) — the real system, full fidelity. yfinance caps 5m history
+  at ~60 days, so ~40 sessions is all that can exist for free.
+- **1h** (`backtest --interval 1h --days 200`) — the same signal *ideas* on
+  hourly bars over 200 trading days. This is a **proxy for regime coverage**,
+  not a measurement of the live 5m system: the opening range becomes the first
+  hour, the pullback EMA shortens to 4 bars, and hourly ATR stops are wide
+  enough that most trades end the day with neither target nor stop hit (small
+  "decided" counts). Measured result: win rates hug 50% there too, in every
+  quarter of the sample.
 
 `run --once --dry-run` is the useful one when the market is closed: it runs the
 exact live cycle against the last completed bar and prints what it *would* have

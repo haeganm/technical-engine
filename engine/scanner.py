@@ -46,13 +46,21 @@ class Alert:
         return (str(self.ts.date()), self.ticker)
 
 
-def enrich(df: pd.DataFrame) -> pd.DataFrame:
+def enrich(df: pd.DataFrame, ema_period: int = 9) -> pd.DataFrame:
     df = df.copy()
     df["VWAP"] = session_vwap(df)
     df["RVOL"] = rvol_tod(df)
-    df["EMA9"] = ema_session(df, 9)
+    df["EMA9"] = ema_session(df, ema_period)
     df["ATR"] = atr(df)
     return df
+
+
+def _signal_kwargs(profile: dict) -> dict[str, dict]:
+    """Per-signal overrides derived from the interval profile."""
+    return {
+        "orb_breakout": {"or_bars": profile["orb_bars"]},
+        "gap_go": {"min_prev_bars": profile["prev_session_min_bars"]},
+    }
 
 
 def _score(last: pd.Series, prev_close: float | None, n_signals: int) -> tuple[int, list[str]]:
@@ -69,7 +77,8 @@ def _score(last: pd.Series, prev_close: float | None, n_signals: int) -> tuple[i
     return sum(points.values()), [k for k, v in points.items() if v]
 
 
-def prepare(frames: dict[str, pd.DataFrame]) -> dict[str, "Prepared"]:
+def prepare(frames: dict[str, pd.DataFrame],
+            profile: dict | None = None) -> dict[str, "Prepared"]:
     """Enrich each ticker and evaluate every signal once, over its whole frame.
 
     Every indicator and signal is causal, so a value at bar t is identical
@@ -78,14 +87,20 @@ def prepare(frames: dict[str, pd.DataFrame]) -> dict[str, "Prepared"]:
     it turns a bar-by-bar backtest from hours into seconds, because each bar
     becomes a row lookup instead of a full recomputation.
     """
+    profile = profile or config.INTERVALS["5m"]
+    sig_kw = _signal_kwargs(profile)
     out = {}
     for ticker, raw in frames.items():
         if len(raw) < config.MIN_BARS:
             continue
-        df = enrich(raw)
-        masks = pd.DataFrame({name: spec.fn(df) for name, spec in REGISTRY.items()},
-                             index=df.index)
-        out[ticker] = Prepared(df=df, masks=masks, prev_close=prev_close_series(df))
+        df = enrich(raw, ema_period=profile["ema_period"])
+        masks = pd.DataFrame(
+            {name: spec.fn(df, **sig_kw.get(name, {})) for name, spec in REGISTRY.items()},
+            index=df.index)
+        out[ticker] = Prepared(
+            df=df, masks=masks,
+            prev_close=prev_close_series(df, min_bars=profile["prev_session_min_bars"]),
+            profile=profile)
     return out
 
 
@@ -94,6 +109,7 @@ class Prepared:
     df: pd.DataFrame       # enriched OHLCV
     masks: pd.DataFrame    # one bool column per signal
     prev_close: pd.Series  # prior-session close per bar (NaN when untrustworthy)
+    profile: dict          # interval profile the masks were computed under
 
 
 def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
@@ -126,9 +142,11 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
 
         df = p.df.iloc[:pos + 1]
         price = float(last["Close"])
+        orb_kw = {"or_bars": p.profile["orb_bars"]}
         # widest structural stop among co-firing setups, then clamped to a sane
         # ATR band -- raw stops range from 0.09% (noise) to 5.6% (not a day trade)
-        stop = min(REGISTRY[name].stop(df) for name in fired)
+        stop = min(REGISTRY[name].stop(df, **(orb_kw if name == "orb_breakout" else {}))
+                   for name in fired)
         r = price - stop
         if not math.isfinite(r):
             continue
@@ -149,15 +167,17 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
             atr=round(atr_now, 3),
             day_change=(None if prev_close is None
                         else round(price / prev_close - 1, 4)),
-            context=tuple(why) + tuple(REGISTRY[name].context(df) for name in fired),
+            context=tuple(why) + tuple(
+                REGISTRY[name].context(df, **(orb_kw if name == "orb_breakout" else {}))
+                for name in fired),
         ))
     return alerts
 
 
 def scan_once(frames: dict[str, pd.DataFrame], as_of: pd.Timestamp,
-              min_score: int = config.MIN_SCORE) -> list[Alert]:
+              min_score: int = config.MIN_SCORE, profile: dict | None = None) -> list[Alert]:
     """Frames in, alerts out. Pure -- no network, no clock, no side effects."""
-    return scan_prepared(prepare(frames), as_of, min_score)
+    return scan_prepared(prepare(frames, profile), as_of, min_score)
 
 
 def last_closed_bar(now: pd.Timestamp, bar_minutes: int = config.BAR_MINUTES) -> pd.Timestamp:

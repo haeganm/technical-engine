@@ -100,9 +100,21 @@ def test_stability_splits_the_sample_and_reports_the_swing():
     data.save("bars", pd.DataFrame(bars))
     st = journal.stability(journal.LIVE, by="signal")
     row = st.iloc[0]
-    assert row["win_first"] == 1.0 and row["win_second"] == 0.0
+    assert row["win_p1"] == 1.0 and row["win_p2"] == 0.0
     assert row["swing"] == -1.0
     assert "-100.0%" in journal.format_stability(st)
+    # 4 sessions cannot support 4 splits (needs >= 2 per slice)
+    assert journal.stability(journal.LIVE, n_splits=4).empty
+
+
+def test_r_result_maps_outcomes():
+    journal.append([_alert()])
+    win = _bars([("10:05", 101.5, 100.0, 101.4)])
+    assert journal.score_alerts(bars=win).iloc[0]["r_result"] == 1.0
+    loss = _bars([("10:05", 100.2, 98.5, 98.6)])
+    assert journal.score_alerts(bars=loss).iloc[0]["r_result"] == -1.0
+    both = _bars([("10:05", 101.5, 98.5, 100.0)])
+    assert journal.score_alerts(bars=both).iloc[0]["r_result"] == 0.0
 
 
 def test_stability_needs_enough_sessions():

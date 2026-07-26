@@ -42,7 +42,8 @@ def _today(df: pd.DataFrame) -> pd.DataFrame:
     return df[df.index.date == df.index[-1].date()]
 
 
-def prev_close_series(df: pd.DataFrame) -> pd.Series:
+def prev_close_series(df: pd.DataFrame,
+                      min_bars: int = config.PREV_SESSION_MIN_BARS) -> pd.Series:
     """Per-bar prior-session close; NaN where the prior session is too partial
     to trust. A truncated prior day would otherwise silently shift 'up on the
     day' and turn gap_go's gap into a two-day move.
@@ -57,7 +58,7 @@ def prev_close_series(df: pd.DataFrame) -> pd.Series:
     prev = {
         d: float(last[days[i - 1]])
         for i, d in enumerate(days)
-        if i and counts[days[i - 1]] >= config.PREV_SESSION_MIN_BARS
+        if i and counts[days[i - 1]] >= min_bars
     }
     return s.map(prev).astype(float)
 
@@ -91,14 +92,14 @@ def hod_breakout(df):
     return _fresh((df["Close"] > prior_hod) & _after(df, 10, 0))
 
 
-def gap_go(df, gap_min=config.GAP_MIN):
+def gap_go(df, gap_min=config.GAP_MIN, min_prev_bars=config.PREV_SESSION_MIN_BARS):
     """Gap up >= gap_min vs the prior close, holding above the open, breaking
     the first bar's high. Silent when the prior session is missing/partial
     (NaN prev close makes the comparison False)."""
     s, n = session(df), _bar_n(df)
     sess_open = df["Open"].groupby(s).transform("first")
     first_high = df["High"].where(n == 0).groupby(s).transform("max")
-    gap = sess_open / prev_close_series(df) - 1
+    gap = sess_open / prev_close_series(df, min_bars=min_prev_bars) - 1
     return _fresh((gap >= gap_min) & (n >= 1)
                   & (df["Close"] > sess_open) & (df["Close"] > first_high))
 
@@ -114,10 +115,10 @@ def ema9_vwap_pullback(df):
 
 # ---------------------------------------------------------------- stops
 
-def _orb_stop(df) -> float:
+def _orb_stop(df, or_bars=config.ORB_BARS) -> float:
     t = _today(df)
-    return float((t["High"].iloc[:config.ORB_BARS].max()
-                  + t["Low"].iloc[:config.ORB_BARS].min()) / 2)
+    return float((t["High"].iloc[:or_bars].max()
+                  + t["Low"].iloc[:or_bars].min()) / 2)
 
 
 def _reclaim_stop(df) -> float:
@@ -138,9 +139,9 @@ def _pullback_stop(df) -> float:
 
 # ---------------------------------------------------------------- context
 
-def _orb_context(df) -> str:
+def _orb_context(df, or_bars=config.ORB_BARS) -> str:
     t = _today(df)
-    return f"OR high {t['High'].iloc[:config.ORB_BARS].max():.2f}"
+    return f"OR high {t['High'].iloc[:or_bars].max():.2f}"
 
 
 def _reclaim_context(df) -> str:

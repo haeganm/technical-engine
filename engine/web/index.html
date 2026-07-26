@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TechnicalEngine</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --border: rgba(255,255,255,0.10);
+    --up: #0ca30c;
+    --down: #d03b3b;
+    --accent: #3987e5;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 20px; max-width: 1060px; margin: 0 auto;
+  }
+  header { display: flex; align-items: center; justify-content: space-between;
+           gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    border: 1px solid var(--border); background: none; color: var(--ink-2);
+    padding: 5px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+  .pill:hover { background: var(--surface); }
+  .pill.on { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
+
+  .hero { margin: 6px 0 4px; }
+  .hero .num { font-size: 52px; font-weight: 650; letter-spacing: -1px; }
+  .hero .num.up { color: var(--up); } .hero .num.down { color: var(--down); }
+  .hero .sub { color: var(--muted); margin-top: 2px; }
+  #cumchart { height: 220px; margin: 10px 0 4px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 10px; margin: 14px 0 22px; }
+  .tile { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .tile .note { color: var(--ink-2); font-size: 12px; margin-top: 1px; }
+
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 22px 0 8px;
+       text-transform: uppercase; letter-spacing: 0.6px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 10px; white-space: nowrap; font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--grid); }
+  td { border-bottom: 1px solid var(--grid); color: var(--ink-2); }
+  th:first-child, td:first-child { text-align: left; }
+  td:first-child { color: var(--ink); font-weight: 550; }
+  tbody tr:hover { background: var(--surface); }
+  #alerts tbody tr { cursor: pointer; }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.one_r { background: var(--up); } .dot.stop { background: var(--down); }
+  .dot.ambiguous { background: var(--muted); } .dot.open { background: var(--accent); }
+  .dot.unresolved { background: none; border: 1px solid var(--muted); }
+
+  #detail { display: none; background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 14px; margin: 10px 0 16px; }
+  #detail .head { display: flex; justify-content: space-between; align-items: baseline;
+                  flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  #detail .head b { font-size: 17px; }
+  #detail .head .meta { color: var(--muted); font-size: 12.5px; }
+  #candles { height: 340px; }
+  #ohlc { color: var(--muted); font-size: 12px; min-height: 16px; margin-top: 4px;
+          font-variant-numeric: tabular-nums; }
+  .key { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .key i { font-style: normal; }
+  .foot { color: var(--muted); font-size: 12.5px; margin: 26px 0 10px; line-height: 1.6; }
+  #err { color: var(--down); margin: 12px 0; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TechnicalEngine <span>· results</span></h1>
+  <div class="pills" id="sources"></div>
+</header>
+
+<div id="err"></div>
+
+<div class="hero">
+  <div class="num" id="totalR">–</div>
+  <div class="sub" id="heroSub">cumulative R (each alert risks 1R; +1 win, −1 stop, 0 otherwise)</div>
+</div>
+<div id="cumchart"></div>
+
+<div class="tiles" id="tiles"></div>
+
+<div id="detail">
+  <div class="head">
+    <b id="dTicker"></b>
+    <span class="meta" id="dMeta"></span>
+  </div>
+  <div id="candles"></div>
+  <div id="ohlc"></div>
+  <div class="key">line <i style="color:var(--accent)">■</i> VWAP · dashed lines: entry / stop / 1R / 2R · marker = alert bar</div>
+</div>
+
+<h2>Alerts</h2>
+<div class="pills" id="sigfilter" style="margin-bottom:8px"></div>
+<div class="scroll"><table id="alerts">
+  <thead><tr><th>Ticker</th><th>Date</th><th>Time</th><th>Signals</th><th>Score</th>
+      <th>Price</th><th>Stop</th><th>1R</th><th>Outcome</th><th>EOD</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<h2>By signal</h2>
+<div class="scroll"><table id="bysignal"></table></div>
+
+<h2>Stability <span id="stabNote" style="text-transform:none;letter-spacing:0"></span></h2>
+<div class="scroll"><table id="stability"></table></div>
+
+<p class="foot">
+  Win rate is among decided trades (1R or stop hit); the lo–hi band brackets bars where
+  both were hit in the same bar, whose order is unknowable at this resolution.
+  At 1:1 reward:risk you need &gt;50% plus costs to break even. A win rate that swings
+  between time slices is tracking the market regime, not an edge. The 1h source runs
+  the same signal ideas on hourly bars as a long-history proxy — it is not a
+  measurement of the live 5m system. Not financial advice.<br>
+  Charts rendered with <a href="https://www.tradingview.com/" style="color:var(--muted)">TradingView Lightweight Charts&trade;</a>.
+</p>
+
+<script src="/lightweight-charts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -30,6 +30,20 @@ WAKE_LAG_S = 60
 KEEP_DAYS = 60         # yfinance caps 5m history at ~60d => ~40 sessions
 MIN_BARS = 20          # skip tickers with fewer usable bars
 
+# Interval profiles. "5m" is the live system; "1h" is the long-history backtest
+# proxy (yfinance allows ~730d of hourly vs ~60d of 5m). Hourly adaptations:
+# orb_bars=1 because the opening range IS the first hour; ema_period=4 because
+# a 9-bar EMA never reaches min_periods inside a 7-bar session (the pullback
+# signal would silently die); prev_session_min_bars=5 of 7.
+INTERVALS = {
+    "5m": dict(interval="5m", bar_minutes=5, orb_bars=6, ema_period=9,
+               prev_session_min_bars=60, keep_days=60, fetch_period="60d",
+               store="bars", replay="journal_replay"),
+    "1h": dict(interval="1h", bar_minutes=60, orb_bars=1, ema_period=4,
+               prev_session_min_bars=5, keep_days=440, fetch_period="440d",
+               store="bars_1h", replay="journal_replay_1h"),
+}
+
 # ---------------------------------------------------------------- gates
 RVOL_MIN_ABS = 2.0      # hard gate: bar volume vs its own time-of-day normal
 RVOL_MIN_SAMPLES = 3    # prior same-slot observations required before RVOL is trusted

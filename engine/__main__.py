@@ -71,12 +71,16 @@ def _describe(a) -> str:
 
 # ---------------------------------------------------------------- commands
 
-def cmd_fetch(period: str = config.PERIOD) -> None:
+def cmd_fetch(period: str | None = None, interval: str = "5m") -> None:
     tickers = config.universe()
-    frames = data.fetch_intraday(tickers, period=period)
-    rows = data.store_bars(frames)
-    log.info("fetched %d/%d tickers (period=%s); store: %d rows across %d sessions",
-             len(frames), len(tickers), period, rows, data.store_sessions())
+    p = config.INTERVALS[interval]
+    period = period or p["fetch_period"]
+    frames = data.fetch_intraday(tickers, interval=p["interval"], period=period,
+                                 bar_minutes=p["bar_minutes"])
+    rows = data.store_bars(frames, store=p["store"], keep_days=p["keep_days"])
+    log.info("fetched %d/%d tickers (%s, period=%s); store %s: %d rows across %d sessions",
+             len(frames), len(tickers), interval, period, p["store"], rows,
+             data.store_sessions(p["store"]))
 
 
 def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
@@ -179,8 +183,10 @@ def cmd_run(once: bool = False, dry_run: bool = False) -> None:
         time.sleep(max((next_wake(now) - now).total_seconds(), 5))
 
 
-def cmd_replay(date_str: str, min_score: int = config.MIN_SCORE) -> None:
-    frames = data.load_frames()
+def cmd_replay(date_str: str, min_score: int = config.MIN_SCORE,
+               interval: str = "5m") -> None:
+    p_int = config.INTERVALS[interval]
+    frames = data.load_frames(store=p_int["store"])
     try:
         day = pd.Timestamp(date_str).date()
     except ValueError:
@@ -190,7 +196,7 @@ def cmd_replay(date_str: str, min_score: int = config.MIN_SCORE) -> None:
     if not bars:
         log.error("no bars for %s in the store — run `fetch` first", date_str)
         sys.exit(CONFIG_ERROR)
-    prep = scanner.prepare(frames)
+    prep = scanner.prepare(frames, p_int)
     sent: set = set()
     total = 0
     for ts in bars:
@@ -200,19 +206,24 @@ def cmd_replay(date_str: str, min_score: int = config.MIN_SCORE) -> None:
     print(f"replay {date_str}: {total} alerts across {len(bars)} bars")
 
 
-def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE) -> None:
+def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE,
+                 interval: str = "5m") -> None:
     """Replay every stored session through the live scan path and score it."""
-    frames = data.load_frames()
+    p = config.INTERVALS[interval]
+    frames = data.load_frames(store=p["store"])
     if not frames:
-        log.error("bars store is empty — run `fetch --period 60d` first")
+        log.error("store %s is empty — run `fetch --interval %s` first", p["store"], interval)
         sys.exit(CONFIG_ERROR)
     all_days = sorted({ts.date() for df in frames.values() for ts in df.index})
     if days:
         all_days = all_days[-days:]
-    journal.clear(journal.REPLAY)
-    print(f"replaying {len(all_days)} sessions (min_score={min_score})...")
+        cutoff = pd.Timestamp(all_days[0], tz=config.ET)
+        frames = {t: df[df.index >= cutoff - pd.Timedelta(days=14)]  # RVOL warm-up margin
+                  for t, df in frames.items()}
+    journal.clear(p["replay"])
+    print(f"replaying {len(all_days)} sessions at {interval} (min_score={min_score})...")
     t0 = time.monotonic()
-    prep = scanner.prepare(frames)
+    prep = scanner.prepare(frames, p)
     fired_all = []
     for day in all_days:
         bars = sorted({ts for df in frames.values() for ts in df.index if ts.date() == day})
@@ -220,25 +231,32 @@ def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE) -> 
         for ts in bars:
             fired_all += notify.dispatch(scanner.scan_prepared(prep, ts, min_score),
                                          sent, lambda b: b)
-    journal.append(fired_all, journal.REPLAY)
+    journal.append(fired_all, p["replay"])
     log.info("replayed %d sessions in %.1fs", len(all_days), time.monotonic() - t0)
 
+    store_bars_df = data.load(p["store"])
     for by in ("signal", "score"):
         print(f"\n=== by {by} ===")
-        print(journal.format_stats(journal.stats(journal.REPLAY, by=by)))
+        print(journal.format_stats(journal.stats(p["replay"], by=by, bars=store_bars_df)))
 
-    print("\n=== stability: first half vs second half ===")
-    print(journal.format_stability(journal.stability(journal.REPLAY, by="signal")))
-    print(journal.format_stability(journal.stability(journal.REPLAY, by="score")))
+    # 4 slices once the sample is long enough to support them; halves otherwise
+    n_splits = 4 if len(all_days) >= 80 else 2
+    print(f"\n=== stability: win rate across {n_splits} time slices ===")
+    for by in ("signal", "score"):
+        print(journal.format_stability(
+            journal.stability(p["replay"], by=by, n_splits=n_splits, bars=store_bars_df)))
 
-    j = data.load(journal.REPLAY)
+    j = data.load(p["replay"])
     n = 0 if j is None else len(j)
     per_day = n / len(all_days) if all_days else 0
     print(f"\n{n} alerts over {len(all_days)} sessions ({all_days[0]} to {all_days[-1]}), "
-          f"{per_day:.1f}/day, min_score={min_score}.")
+          f"{per_day:.1f}/day, interval={interval}, min_score={min_score}.")
+    if interval != "5m":
+        print("NOTE: this tier runs the same signal IDEAS on hourly bars -- a proxy\n"
+              "for regime coverage, not a measurement of the live 5m system.")
     print("Read the stability table before believing anything above it. A win rate\n"
-          "that swings between halves is tracking the market regime, not an edge --\n"
-          "and picking a threshold from the better half is how a backtest lies.\n"
+          "that swings between slices is tracking the market regime, not an edge --\n"
+          "and picking a threshold from the better slice is how a backtest lies.\n"
           "At 1:1 reward:risk you need >50% plus costs to break even.")
 
 
@@ -281,18 +299,25 @@ def main(argv=None) -> None:
     r.add_argument("--dry-run", action="store_true", help="scan and print, never post")
 
     f = sub.add_parser("fetch", help="refresh the local bar store")
-    f.add_argument("--period", default=config.PERIOD, help="yfinance period (max 60d for 5m)")
+    f.add_argument("--period", default=None,
+                   help="yfinance period (default: the interval's max history)")
+    f.add_argument("--interval", default="5m", choices=list(config.INTERVALS))
 
     rp = sub.add_parser("replay", help="print alerts for one past session")
     rp.add_argument("date", help="YYYY-MM-DD")
     rp.add_argument("--min-score", type=int, default=config.MIN_SCORE)
+    rp.add_argument("--interval", default="5m", choices=list(config.INTERVALS))
 
     bt = sub.add_parser("backtest", help="score every stored session")
     bt.add_argument("--days", type=int, default=None)
     bt.add_argument("--min-score", type=int, default=config.MIN_SCORE)
+    bt.add_argument("--interval", default="5m", choices=list(config.INTERVALS))
 
     rep = sub.add_parser("report", help="hit rates from the live journal")
     rep.add_argument("--by", default="signal", choices=["signal", "score", "ticker"])
+
+    srv = sub.add_parser("serve", help="local results dashboard")
+    srv.add_argument("--port", type=int, default=8765)
 
     sub.add_parser("test-webhook", help="post dummy alerts to Discord")
 
@@ -301,13 +326,16 @@ def main(argv=None) -> None:
     if a.cmd == "run":
         cmd_run(once=a.once, dry_run=a.dry_run)
     elif a.cmd == "fetch":
-        cmd_fetch(period=a.period)
+        cmd_fetch(period=a.period, interval=a.interval)
     elif a.cmd == "replay":
-        cmd_replay(a.date, a.min_score)
+        cmd_replay(a.date, a.min_score, interval=a.interval)
     elif a.cmd == "backtest":
-        cmd_backtest(a.days, a.min_score)
+        cmd_backtest(a.days, a.min_score, interval=a.interval)
     elif a.cmd == "report":
         cmd_report(by=a.by)
+    elif a.cmd == "serve":
+        from .server import serve
+        serve(a.port)
     elif a.cmd == "test-webhook":
         cmd_test_webhook()
 

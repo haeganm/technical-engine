@@ -66,7 +66,7 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
     Outcomes: one_r | stop | ambiguous | open | unresolved.
     """
     cols = ["session_date", "ticker", "signal", "score", "ts", "price",
-            "outcome", "fwd_30m", "fwd_60m", "fwd_eod", "reason"]
+            "outcome", "r_result", "fwd_30m", "fwd_60m", "fwd_eod", "reason"]
     j = data.load(name)
     if j is None or j.empty:
         return pd.DataFrame(columns=cols)
@@ -74,6 +74,7 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
     if bars is None or bars.empty:
         out = j[["session_date", "ticker", "signal", "score", "ts", "price"]].copy()
         out["outcome"], out["reason"] = "unresolved", "no_bars"
+        out["r_result"] = 0.0
         for c in ("fwd_30m", "fwd_60m", "fwd_eod"):
             out[c] = np.nan
         return out[cols]
@@ -117,7 +118,10 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
         else:
             base["outcome"] = "ambiguous"  # same bar -- intrabar order unknowable
         rows.append(base)
-    return pd.DataFrame(rows)[cols]
+    out = pd.DataFrame(rows)
+    # +1R on a win, -1R on a stop, 0 otherwise -- the frontend's equity curve
+    out["r_result"] = out["outcome"].map({"one_r": 1.0, "stop": -1.0}).fillna(0.0)
+    return out[cols]
 
 
 def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -153,14 +157,15 @@ def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None
     return out.reset_index()
 
 
-def stability(name: str = REPLAY, by: str = "signal") -> pd.DataFrame:
-    """Win rate in the first half of the sample vs the second.
+def stability(name: str = REPLAY, by: str = "signal", n_splits: int = 2,
+              bars: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Win rate across contiguous time slices of the sample.
 
     The single most important table here. A signal that looks strong overall
-    but swings wildly between halves is tracking the market regime, not an
-    edge -- and tuning a threshold on the good half is how a backtest lies.
+    but swings wildly between slices is tracking the market regime, not an
+    edge -- and tuning a threshold on the good slice is how a backtest lies.
     """
-    scored = score_alerts(name)
+    scored = score_alerts(name, bars=bars)
     if scored.empty:
         return pd.DataFrame()
     d = scored[scored["outcome"].isin(["one_r", "stop", "ambiguous"])].copy()
@@ -168,16 +173,19 @@ def stability(name: str = REPLAY, by: str = "signal") -> pd.DataFrame:
         return pd.DataFrame()
     d["win"] = d["outcome"].isin(["one_r", "ambiguous"])
     days = sorted(d["session_date"].unique())
-    if len(days) < 4:
+    if len(days) < 2 * n_splits:
         return pd.DataFrame()
-    mid = days[len(days) // 2]
-    d["half"] = np.where(d["session_date"] < mid, "first", "second")
-    g = d.groupby([by, "half"])["win"].agg(["mean", "size"]).unstack("half")
-    out = pd.DataFrame({
-        "n_first": g[("size", "first")], "win_first": g[("mean", "first")].round(3),
-        "n_second": g[("size", "second")], "win_second": g[("mean", "second")].round(3),
-    })
-    out["swing"] = (out["win_second"] - out["win_first"]).round(3)
+    edges = [days[(len(days) * i) // n_splits] for i in range(n_splits)]
+    labels = [f"p{i + 1}" for i in range(n_splits)]
+    d["slice"] = labels[0]
+    for i in range(1, n_splits):
+        d.loc[d["session_date"] >= edges[i], "slice"] = labels[i]
+    g = d.groupby([by, "slice"])["win"].agg(["mean", "size"]).unstack("slice")
+    out = pd.DataFrame(index=g.index)
+    for lab in labels:
+        out[f"n_{lab}"] = g.get(("size", lab), pd.Series(index=g.index)).fillna(0).astype(int)
+        out[f"win_{lab}"] = g.get(("mean", lab), pd.Series(index=g.index)).round(3)
+    out["swing"] = (out[f"win_{labels[-1]}"] - out[f"win_{labels[0]}"]).round(3)
     return out.reset_index()
 
 
@@ -185,9 +193,10 @@ def format_stability(df: pd.DataFrame) -> str:
     if df.empty:
         return "Not enough sessions to split."
     d = df.copy()
-    for c in ("win_first", "win_second"):
-        d[c] = d[c].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
-    d["swing"] = d["swing"].map(lambda v: "-" if pd.isna(v) else f"{v:+.1%}")
+    for c in d.columns:
+        if c.startswith("win_") or c == "swing":
+            fmt = "{:+.1%}" if c == "swing" else "{:.1%}"
+            d[c] = d[c].map(lambda v, f=fmt: "-" if pd.isna(v) else f.format(v))
     return d.to_string(index=False)
 
 
