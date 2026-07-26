@@ -20,7 +20,11 @@ rather than to hide it. Day trading is risky; most day traders lose money.
 
 No. Run `python -m engine backtest` yourself, or browse it in `python -m engine
 serve`. **The shipped configuration**, over 60 sessions of 5m bars across 506
-tickers (2026-04-29 to 2026-07-24) — 5,400 alerts, 90/day:
+tickers (2026-04-29 to 2026-07-24) — 5,400 alerts. Expect a **median of 99
+alerts per day** (mean 108, range 48–235; the backtest's headline 90/day is
+diluted by the first ~10 sessions, which produce nothing while the RVOL
+baseline fills). The busiest single 5-minute cycle observed was 127 alerts,
+which posts as 13 Discord messages over ~13 seconds:
 
 | signal | decided | win rate | first half | second half |
 |---|---|---|---|---|
@@ -76,7 +80,7 @@ but **retired**: they measured worst in both halves of the sample. Clear
 Signals describe **structure only**. Every alert must additionally clear a
 central gate — relative volume ≥2× its own time-of-day normal, and price above
 VWAP — and score enough of 6 confirmations (threshold in `config.MIN_SCORE`,
-currently 4, chosen for ~90 alerts/day rather than for edge):
+currently 4, chosen for ~100 alerts/day rather than for edge):
 
 - up on the day
 - RVOL ≥ 3×

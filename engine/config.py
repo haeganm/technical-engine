@@ -97,7 +97,7 @@ STRONG_CLOSE = 0.6      # score point: closed in the top 40% of the bar's range
 # signal sets x threshold showed every option in the 50-100/day band lands at
 # 44.5-45.3% out-of-sample, so the choice buys selectivity, not a better win
 # rate. Re-derive with `backtest --min-score N`.
-MIN_SCORE = 4          # measured: 90 alerts/day, 47.2% win (43.9% second half)
+MIN_SCORE = 4          # measured: ~99 alerts/day median, 47.2% win (43.9% 2nd half)
 
 # ---------------------------------------------------------------- risk
 MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
