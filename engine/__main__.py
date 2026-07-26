@@ -27,11 +27,12 @@ def setup_logging(verbose: bool = False) -> None:
     except (AttributeError, OSError):
         pass
     handlers = [
-        logging.StreamHandler(sys.stdout),
         logging.handlers.RotatingFileHandler(
             config.DATA / "engine.log", maxBytes=config.LOG_MAX_BYTES,
             backupCount=config.LOG_BACKUPS, encoding="utf-8"),
     ]
+    if sys.stdout is not None:  # absent under pythonw.exe -- file-only there
+        handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
