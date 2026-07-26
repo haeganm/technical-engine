@@ -90,7 +90,8 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
     t0 = time.monotonic()
     frames = data.fetch_intraday(tickers)
     data.store_bars(frames)
-    stored = data.load_frames()
+    stored = data.load_frames(
+        since=as_of - pd.Timedelta(days=config.LIVE_LOOKBACK_DAYS))
     alerts = scanner.scan_once(stored, as_of)
 
     if dry_run:
@@ -110,23 +111,32 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
              "sessions=%d elapsed=%.1fs",
              as_of.strftime("%Y-%m-%d %H:%M"), len(frames), len(stored), at_as_of,
              len(alerts), len(fired), data.store_sessions(), time.monotonic() - t0)
+    elapsed = time.monotonic() - t0
     if stored and at_as_of < len(stored) * 0.5:
         log.warning("only %d/%d tickers have a bar at %s — data may be lagging",
                     at_as_of, len(stored), as_of.strftime("%H:%M"))
+    if elapsed > 240:
+        log.warning("cycle took %.0fs — approaching the 5-minute cadence", elapsed)
     return fired
 
 
-def _post_close(session_date: str, tickers: list[str], url: str | None, dry_run: bool) -> None:
-    """Final fetch (captures the true closing bar) + daily summary."""
+def _post_close(tickers: list[str]) -> None:
+    """Final fetch only -- captures the true 15:55 bar in the store.
+    Nothing is posted: the channel is BUY alerts (+ morning heartbeat) only."""
     frames = data.fetch_intraday(tickers)
     data.store_bars(frames)
-    rows = journal.daily_summary(session_date)
-    embed = notify.summary_embed(session_date, rows)
-    if dry_run or not url:
-        log.info("[dry-run] daily summary: %d alert(s)", len(rows))
+    log.info("post-close fetch stored the final bars")
+
+
+def _post_open_status(url: str | None, tickers: list[str], dry_run: bool) -> None:
+    if dry_run or not url or not config.POST_OPEN_STATUS:
         return
+    embed = notify.status_embed(
+        "Scanner online",
+        [f"Watching {len(tickers)} tickers · store has {data.store_sessions()} sessions",
+         "BUY alerts will post here as they trigger."])
     notify.post({"embeds": [embed]}, url)
-    log.info("posted daily summary for %s (%d alerts)", session_date, len(rows))
+    log.info("posted morning status")
 
 
 def cmd_run(once: bool = False, dry_run: bool = False) -> None:
@@ -143,7 +153,8 @@ def cmd_run(once: bool = False, dry_run: bool = False) -> None:
         if dry_run:
             # off-hours there is no bar at the current wall clock; fall back to
             # the newest stored bar so this stays a useful verification command
-            stored = data.load_frames()
+            stored = data.load_frames(
+                since=now_et() - pd.Timedelta(days=config.LIVE_LOOKBACK_DAYS))
             newest = max((df.index[-1] for df in stored.values() if len(df)), default=None)
             if newest is not None and newest < as_of:
                 log.info("market closed — judging the last stored bar (%s) instead of %s",
@@ -154,7 +165,8 @@ def cmd_run(once: bool = False, dry_run: bool = False) -> None:
 
     sent: set = set()
     seeded_for = None
-    summarized_for = None
+    closed_for = None
+    opened_for = None
     backoff = 0
     while True:
         now = now_et()
@@ -164,12 +176,15 @@ def cmd_run(once: bool = False, dry_run: bool = False) -> None:
             seeded_for = today
             log.info("session %s: %d alert(s) already sent today", today, len(sent))
         if not market_open(now):
-            if (summarized_for != today and now.weekday() < 5
+            if (closed_for != today and now.weekday() < 5
                     and now.time() >= config.MARKET_CLOSE):
-                _post_close(today, tickers, url, dry_run)
-                summarized_for = today
+                _post_close(tickers)
+                closed_for = today
             time.sleep(300)
             continue
+        if opened_for != today:
+            _post_open_status(url, tickers, dry_run)
+            opened_for = today
         try:
             _cycle(tickers, scanner.last_closed_bar(now), sent, url, dry_run)
             backoff = 0
@@ -235,17 +250,18 @@ def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE,
     journal.append(fired_all, p["replay"])
     log.info("replayed %d sessions in %.1fs", len(all_days), time.monotonic() - t0)
 
-    store_bars_df = data.load(p["store"])
+    # score once and reuse: scoring groups the whole bars store (millions of rows)
+    scored = journal.score_alerts(p["replay"], bars=data.load(p["store"]))
     for by in ("signal", "score"):
         print(f"\n=== by {by} ===")
-        print(journal.format_stats(journal.stats(p["replay"], by=by, bars=store_bars_df)))
+        print(journal.format_stats(journal.stats(p["replay"], by=by, scored=scored)))
 
     # 4 slices once the sample is long enough to support them; halves otherwise
     n_splits = 4 if len(all_days) >= 80 else 2
     print(f"\n=== stability: win rate across {n_splits} time slices ===")
     for by in ("signal", "score"):
         print(journal.format_stability(
-            journal.stability(p["replay"], by=by, n_splits=n_splits, bars=store_bars_df)))
+            journal.stability(p["replay"], by=by, n_splits=n_splits, scored=scored)))
 
     j = data.load(p["replay"])
     n = 0 if j is None else len(j)
@@ -277,14 +293,8 @@ def cmd_test_webhook() -> None:
         for i in range(12)  # 12 > 10 embeds, so this also proves batching
     ]
     delivered = notify.send_batch(dummies, url)
-    summary = notify.summary_embed(
-        str(ts.date()),
-        [{"ticker": "TST0", "signal": "orb_breakout", "outcome": "one_r"},
-         {"ticker": "TST1", "signal": "hod_breakout", "outcome": "ambiguous"}],
-        tape=0.12, title="Test summary")
-    notify.post({"embeds": [summary]}, url)
     print(f"delivered {len(delivered)}/{len(dummies)} test alerts in "
-          f"{-(-len(dummies) // config.EMBEDS_PER_MSG)} messages, plus a summary. "
+          f"{-(-len(dummies) // config.EMBEDS_PER_MSG)} messages. "
           "Check your Discord channel.")
 
 

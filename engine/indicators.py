@@ -56,16 +56,21 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
     return pv / v.replace(0, np.nan)
 
 
-def rvol_tod(df: pd.DataFrame, min_samples: int = config.RVOL_MIN_SAMPLES) -> pd.Series:
+def rvol_tod(df: pd.DataFrame, min_samples: int = config.RVOL_MIN_SAMPLES,
+             lookback: int = config.RVOL_LOOKBACK_SESSIONS) -> pd.Series:
     """Bar volume / mean volume of the SAME time-of-day slot on prior sessions.
 
-    Within a slot group, shift(1) drops the current bar before the expanding
+    Within a slot group, shift(1) drops the current bar before the rolling
     mean, so the baseline is strictly prior sessions (leak-safe). min_samples
     keeps a ratio-against-one-observation from being treated as a signal.
+
+    The baseline is a fixed `lookback`-session window rather than an expanding
+    mean so that the value at a given bar does not depend on how much history
+    the caller happened to load -- that is what keeps the live scan and the
+    backtest computing the same number.
     """
     slot = pd.Series(df.index.strftime("%H:%M"), index=df.index)
     grp = df["Volume"].groupby(slot)
-    baseline = grp.transform(lambda x: x.shift(1).expanding().mean())
-    n_prior = grp.transform(lambda x: x.shift(1).expanding().count())
-    baseline = baseline.where(n_prior >= min_samples, np.nan)
+    baseline = grp.transform(
+        lambda x: x.shift(1).rolling(lookback, min_periods=min_samples).mean())
     return df["Volume"] / baseline.replace(0, np.nan)

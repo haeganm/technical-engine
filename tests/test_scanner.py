@@ -93,6 +93,28 @@ def test_min_score_filters(prep, all_ts):
     assert strict < loose, "the score gate must actually remove alerts"
 
 
+def test_spy_never_alerts_but_scores_the_market():
+    """SPY rides along for regime context and must never emit an alert itself."""
+    df = _breakout()
+    spy = _breakout(or_low=99.9)          # SPY also 'breaking out' -> market up
+    alerts = scanner.scan_once({"AAA": df, "SPY": spy}, df.index[-1], min_score=0)
+    assert all(a.ticker != "SPY" for a in alerts)
+    assert alerts, "the real ticker still alerts"
+    assert "market up" in alerts[0].context
+
+
+def test_market_down_withholds_the_regime_point():
+    df = _breakout()
+    n = len(df)
+    spy_closes = [100.0] * (n - 1) + [90.0]   # SPY dumping under its VWAP
+    spy = make_bars(spy_closes, sessions=5, per_session=12)
+    with_spy = scanner.scan_once({"AAA": df, "SPY": spy}, df.index[-1], min_score=0)
+    without = scanner.scan_once({"AAA": df}, df.index[-1], min_score=0)
+    assert with_spy and without
+    assert "market up" not in with_spy[0].context
+    assert "market up" not in without[0].context, "missing SPY = no point, no crash"
+
+
 def test_alert_key_is_per_ticker_per_session():
     ts = pd.Timestamp("2026-07-24 10:05", tz=config.ET)
     a = scanner.Alert("AAPL", ("orb_breakout",), 3, ts, 100.0, 99.0, 101.0, 102.0,

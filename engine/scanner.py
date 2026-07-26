@@ -63,18 +63,40 @@ def _signal_kwargs(profile: dict) -> dict[str, dict]:
     }
 
 
-def _score(last: pd.Series, prev_close: float | None, n_signals: int) -> tuple[int, list[str]]:
-    """Independent confirmations, each worth a point. Reported alongside the
-    alert so `backtest --min-score` can tune the threshold against outcomes
-    instead of against intuition."""
+def _score(last: pd.Series, prev_close: float | None, n_signals: int,
+           market_up: bool | None = None,
+           spy_change: float | None = None) -> tuple[int, list[str]]:
+    """Independent confirmations, each worth a point (max 6). Reported alongside
+    the alert so `backtest --min-score` can tune the threshold against outcomes
+    instead of against intuition. market_up/spy_change are None when SPY data is
+    unavailable -- no point awarded, never a crash."""
     rng = last["High"] - last["Low"]
+    day_change = (last["Close"] / prev_close - 1) if prev_close else None
     points = {
         "up on day": prev_close is not None and last["Close"] > prev_close,
         f"rvol>={config.STRONG_RVOL:g}": last["RVOL"] >= config.STRONG_RVOL,
         "closed strong": rng > 0 and (last["Close"] - last["Low"]) >= config.STRONG_CLOSE * rng,
         "confluence": n_signals > 1,
+        "market up": bool(market_up),
+        "rs leader": (day_change is not None and spy_change is not None
+                      and day_change > spy_change),
     }
     return sum(points.values()), [k for k, v in points.items() if v]
+
+
+def _market_context(prep: dict[str, "Prepared"], as_of: pd.Timestamp) -> tuple[bool | None, float | None]:
+    """SPY regime at as_of: (above its VWAP?, its day change). (None, None) when absent."""
+    spy = prep.get("SPY")
+    if spy is None:
+        return None, None
+    pos = spy.df.index.get_indexer([as_of])[0]
+    if pos < 0:
+        return None, None
+    row = spy.df.iloc[pos]
+    up = bool(row["Close"] > row["VWAP"]) if pd.notna(row["VWAP"]) else None
+    pc = spy.prev_close.iloc[pos]
+    change = (float(row["Close"] / pc - 1)) if pd.notna(pc) else None
+    return up, change
 
 
 def prepare(frames: dict[str, pd.DataFrame],
@@ -114,8 +136,11 @@ class Prepared:
 
 def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
                   min_score: int = config.MIN_SCORE) -> list[Alert]:
+    market_up, spy_change = _market_context(prep, as_of)
     alerts = []
     for ticker, p in prep.items():
+        if ticker in config.EXTRA_TICKERS:
+            continue  # context tickers (SPY) inform the score, never alert
         # the bar being judged must be THIS bar, closed, for this ticker
         pos = p.df.index.get_indexer([as_of])[0]
         if pos < config.MIN_BARS - 1:
@@ -136,7 +161,7 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
 
         pc = p.prev_close.iloc[pos]
         prev_close = None if pd.isna(pc) else float(pc)
-        score, why = _score(last, prev_close, len(fired))
+        score, why = _score(last, prev_close, len(fired), market_up, spy_change)
         if score < min_score:
             continue
 

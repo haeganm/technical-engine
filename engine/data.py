@@ -135,15 +135,22 @@ def store_bars(frames: dict[str, pd.DataFrame], now: pd.Timestamp | None = None,
     return merge_save(store, new, keys=["ticker", "ts"], cutoff=cutoff)
 
 
-def load_frames(upto: pd.Timestamp | None = None,
-                store: str = "bars") -> dict[str, pd.DataFrame]:
+def load_frames(upto: pd.Timestamp | None = None, store: str = "bars",
+                since: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
     """Rebuild per-ticker frames from the store. This is what both the live
-    scan and the backtest read, so they see identical history."""
+    scan and the backtest read, so they see identical history.
+
+    `since` bounds how far back the live path loads: the store is never pruned
+    (Yahoo cannot re-serve old 5m bars), so without a bound every cycle would
+    re-enrich the entire archive and get slower forever.
+    """
     df = load(store)
     if df is None or df.empty:
         return {}
     if upto is not None:
         df = df[df["ts"] <= upto]
+    if since is not None:
+        df = df[df["ts"] >= since]
     out = {}
     for t, g in df.groupby("ticker"):
         f = g.set_index("ts")[OHLCV].sort_index()

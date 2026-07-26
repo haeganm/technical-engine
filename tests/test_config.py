@@ -52,8 +52,10 @@ def test_real_environment_wins(env_file, monkeypatch):
     assert config.env("DISCORD_WEBHOOK_URL") == "https://from-env"
 
 
-def test_universe_normalizes_class_shares():
+def test_universe_merges_sp500_and_nasdaq100():
     u = config.universe()
-    assert len(u) > 50
+    assert len(u) > 450, "S&P 500 + Nasdaq-100 union should be ~520 names"
     assert all(t == t.upper() and "." not in t for t in u)
-    assert len(set(u)) == len(u), "no duplicate tickers"
+    assert len(set(u)) == len(u), "no duplicate tickers across the two lists"
+    assert "SPY" in u, "context ticker rides along in the fetch list"
+    assert "AAPL" in u and "BRK-B" in u

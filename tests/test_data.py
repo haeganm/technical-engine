@@ -30,6 +30,19 @@ def test_store_prunes_beyond_keep_days(frames):
     assert before > 0 and data.store_sessions() == 0
 
 
+def test_load_frames_since_bounds_live_history(frames):
+    """The store is never pruned, so the live path must bound how far back it
+    loads or every cycle gets slower forever."""
+    now = max(df.index[-1] for df in frames.values())
+    data.store_bars(frames, now=now)
+    full = data.load_frames()
+    recent = data.load_frames(since=now - pd.Timedelta(days=2))
+    assert full and recent
+    assert sum(len(d) for d in recent.values()) < sum(len(d) for d in full.values())
+    for d in recent.values():
+        assert d.index.min() >= now - pd.Timedelta(days=2)
+
+
 def test_merge_save_dedupes_on_key(frames):
     one = dict(list(frames.items())[:1])
     now = pd.Timestamp("2026-07-24 16:00", tz=config.ET)

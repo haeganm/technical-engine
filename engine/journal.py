@@ -124,9 +124,14 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
     return out[cols]
 
 
-def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Aggregate outcomes. `one_r_lo/hi` bracket the same-bar ambiguity."""
-    scored = score_alerts(name, bars=bars)
+def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None,
+          scored: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Aggregate outcomes. `one_r_lo/hi` bracket the same-bar ambiguity.
+
+    Pass `scored` to reuse a single score_alerts pass across several tables --
+    scoring groups the whole bars store, which is millions of rows.
+    """
+    scored = score_alerts(name, bars=bars) if scored is None else scored
     if scored.empty:
         return pd.DataFrame()
     resolved = scored[scored["outcome"] != "unresolved"]
@@ -158,14 +163,15 @@ def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None
 
 
 def stability(name: str = REPLAY, by: str = "signal", n_splits: int = 2,
-              bars: pd.DataFrame | None = None) -> pd.DataFrame:
+              bars: pd.DataFrame | None = None,
+              scored: pd.DataFrame | None = None) -> pd.DataFrame:
     """Win rate across contiguous time slices of the sample.
 
     The single most important table here. A signal that looks strong overall
     but swings wildly between slices is tracking the market regime, not an
     edge -- and tuning a threshold on the good slice is how a backtest lies.
     """
-    scored = score_alerts(name, bars=bars)
+    scored = score_alerts(name, bars=bars) if scored is None else scored
     if scored.empty:
         return pd.DataFrame()
     d = scored[scored["outcome"].isin(["one_r", "stop", "ambiguous"])].copy()
@@ -198,14 +204,6 @@ def format_stability(df: pd.DataFrame) -> str:
             fmt = "{:+.1%}" if c == "swing" else "{:.1%}"
             d[c] = d[c].map(lambda v, f=fmt: "-" if pd.isna(v) else f.format(v))
     return d.to_string(index=False)
-
-
-def daily_summary(session_date: str, name: str = LIVE) -> list[dict]:
-    scored = score_alerts(name)
-    if scored.empty:
-        return []
-    day = scored[scored["session_date"] == session_date]
-    return day[["ticker", "signal", "outcome"]].to_dict("records")
 
 
 COLUMNS = ["n", "decided", "one_r", "stopped", "ambiguous", "open",

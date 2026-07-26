@@ -90,9 +90,29 @@ def test_embed_shape_is_serializable():
     assert notify._embed(multi)["title"].endswith("+1")
 
 
-def test_summary_embed_handles_an_empty_day():
-    e = notify.summary_embed("2026-07-24", [])
-    assert "No alerts" in e["description"]
-    e = notify.summary_embed("2026-07-24", [
-        {"ticker": "AAPL", "signal": "orb_breakout", "outcome": "ambiguous"}])
-    assert "1R and stop same bar" in e["description"]
+def test_post_close_never_posts_to_discord(monkeypatch):
+    """Buy-only channel: the end-of-day path stores bars but sends nothing."""
+    from engine import __main__ as main_mod
+    from engine import data
+
+    monkeypatch.setattr(data, "fetch_intraday", lambda *a, **k: {})
+    monkeypatch.setattr(data, "store_bars", lambda *a, **k: 0)
+
+    def boom(*a, **k):
+        raise AssertionError("post-close must not touch the webhook")
+
+    monkeypatch.setattr(notify, "post", boom)
+    monkeypatch.setattr(notify, "send_batch", boom)
+    main_mod._post_close(["AAPL"])
+
+
+def test_status_embed_is_neutral():
+    e = notify.status_embed("Scanner online", ["watching 591 tickers"])
+    assert e["color"] == notify.GREY
+    for word in ("stop", "loss", "sold", "stopped"):
+        assert word not in json_dump(e).lower()
+
+
+def json_dump(obj):
+    import json
+    return json.dumps(obj)

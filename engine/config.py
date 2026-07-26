@@ -14,7 +14,9 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-UNIVERSE_FILE = Path(__file__).resolve().parent / "nasdaq100.txt"
+UNIVERSE_FILES = [Path(__file__).resolve().parent / f
+                  for f in ("sp500.txt", "nasdaq100.txt")]
+EXTRA_TICKERS = ["SPY"]  # fetched for regime/RS context; never alertable
 
 ET = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
@@ -22,13 +24,21 @@ MARKET_CLOSE = time(16, 0)
 
 # ---------------------------------------------------------------- data
 INTERVAL = "5m"
-PERIOD = "5d"          # incremental fetch window; use `fetch --period 60d` to backfill
+# Incremental per-cycle fetch. The live scan reads the local store, so each
+# cycle only needs to top up today's bars -- at ~590 tickers a 5d payload
+# per cycle would be pointless load on Yahoo.
+PERIOD = "1d"
 BAR_MINUTES = 5
 # Yahoo labels bars by interval START, so a bar is only complete at ts+BAR_MINUTES.
 # We wake a full minute past the boundary to give Yahoo time to publish it.
 WAKE_LAG_S = 60
 KEEP_DAYS = 60         # yfinance caps 5m history at ~60d => ~40 sessions
 MIN_BARS = 20          # skip tickers with fewer usable bars
+# How much history each LIVE cycle loads. The store grows without bound, but a
+# scan only needs the RVOL baseline plus indicator warm-up. ~20 calendar days is
+# ~14 sessions: enough to fill RVOL_LOOKBACK_SESSIONS (so live and backtest
+# agree exactly) while keeping the 5-minute cycle fast as the archive grows.
+LIVE_LOOKBACK_DAYS = 20
 
 # Interval profiles. "5m" is the live system; "1h" is the long-history backtest
 # proxy (yfinance allows ~730d of hourly vs ~60d of 5m). Hourly adaptations:
@@ -36,8 +46,10 @@ MIN_BARS = 20          # skip tickers with fewer usable bars
 # a 9-bar EMA never reaches min_periods inside a 7-bar session (the pullback
 # signal would silently die); prev_session_min_bars=5 of 7.
 INTERVALS = {
+    # keep_days is effectively "never prune": Yahoo serves only ~60d of 5m
+    # history, so anything older in our store is irreplaceable. ~10 MB/month.
     "5m": dict(interval="5m", bar_minutes=5, orb_bars=6, ema_period=9,
-               prev_session_min_bars=60, keep_days=60, fetch_period="60d",
+               prev_session_min_bars=60, keep_days=3650, fetch_period="60d",
                store="bars", replay="journal_replay"),
     "1h": dict(interval="1h", bar_minutes=60, orb_bars=1, ema_period=4,
                prev_session_min_bars=5, keep_days=440, fetch_period="440d",
@@ -47,9 +59,14 @@ INTERVALS = {
 # ---------------------------------------------------------------- gates
 RVOL_MIN_ABS = 2.0      # hard gate: bar volume vs its own time-of-day normal
 RVOL_MIN_SAMPLES = 3    # prior same-slot observations required before RVOL is trusted
+# Fixed-length RVOL baseline. It must be a WINDOW, not an expanding mean: live
+# loads a bounded slice of the store while the backtest loads all of it, and an
+# expanding baseline would therefore compute different RVOL for the same bar in
+# the two paths -- against a hard 2.0 gate that silently reclassifies alerts.
+RVOL_LOOKBACK_SESSIONS = 10
 STRONG_RVOL = 3.0       # score point: exceptional volume
 STRONG_CLOSE = 0.6      # score point: closed in the top 40% of the bar's range
-MIN_SCORE = 2           # of 4 possible points -- tune with `backtest --min-score`
+MIN_SCORE = 2           # of 6 possible points -- tune with `backtest --min-score`
 
 # ---------------------------------------------------------------- risk
 MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
@@ -61,11 +78,18 @@ ORB_BARS = 6                 # 30-minute opening range on 5m bars
 RECLAIM_BELOW_BARS = 3
 GAP_MIN = 0.02
 PREV_SESSION_MIN_BARS = 60   # of 78; below this the prior session is too partial to trust
+SQUEEZE_BARS = 20            # Bollinger window for squeeze_breakout
+SQUEEZE_PCTILE = 0.25        # band width must be in the bottom quartile of its history
+THRUST_BARS = 3              # consecutive higher closes for momentum_thrust
 
 # ---------------------------------------------------------------- discord
 EMBEDS_PER_MSG = 10     # Discord's hard limit
 POST_GAP_S = 1.1        # stay inside ~5 requests / 2s
 HTTP_TIMEOUT_S = 10
+POST_OPEN_STATUS = True  # morning "scanner online" post -- the dead-man's switch.
+                         # The channel is otherwise BUY alerts only: no summaries,
+                         # no outcomes, nothing negative. Honesty lives in the
+                         # dashboard and `engine report`.
 
 # ---------------------------------------------------------------- logging
 LOG_MAX_BYTES = 5_000_000
@@ -90,8 +114,12 @@ def env(key: str) -> str | None:
 
 
 def universe() -> list[str]:
-    return [
-        t.strip().upper().replace(".", "-")  # yfinance uses '-' for class shares
-        for t in UNIVERSE_FILE.read_text().splitlines()
-        if t.strip() and not t.startswith("#")
-    ]
+    """S&P 500 + Nasdaq-100, deduped and normalized. SPY etc. ride along via
+    EXTRA_TICKERS for market context but are excluded from alerting."""
+    seen: dict[str, None] = {}
+    for path in UNIVERSE_FILES:
+        for t in path.read_text().splitlines():
+            t = t.strip().upper().replace(".", "-")  # yfinance class-share form
+            if t and not t.startswith("#"):
+                seen[t] = None
+    return sorted(seen) + [t for t in EXTRA_TICKERS if t not in seen]

@@ -22,14 +22,6 @@ BLUE = 0x3498DB
 GREY = 0x95A5A6
 TRADINGVIEW = "https://www.tradingview.com/chart/?symbol={ticker}"
 
-OUTCOME_LABEL = {
-    "one_r": "hit 1R",
-    "stop": "stopped",
-    "ambiguous": "1R and stop same bar",
-    "open": "open at close",
-    "unresolved": "unresolved",
-}
-
 
 def _embed(a) -> dict:
     risk = a.price - a.stop
@@ -44,7 +36,7 @@ def _embed(a) -> dict:
         {"name": "Risk / share", "value": f"${risk:,.2f}", "inline": True},
         {"name": "RVOL", "value": f"{a.rvol:.1f}x", "inline": True},
         {"name": "ATR", "value": f"${a.atr:,.2f}", "inline": True},
-        {"name": f"Score {a.score}/4", "value": ", ".join(a.context) or "—", "inline": False},
+        {"name": f"Score {a.score}/6", "value": ", ".join(a.context) or "—", "inline": False},
     ]
     if a.day_change is not None:
         fields.insert(3, {"name": "Day", "value": f"{a.day_change:+.2%}", "inline": True})
@@ -58,33 +50,10 @@ def _embed(a) -> dict:
     }
 
 
-def summary_embed(session_date: str, rows: list[dict], tape: float | None = None,
-                  title: str | None = None) -> dict:
-    """Post-close recap: what fired and what it did."""
-    if rows:
-        lines = [f"`{r['ticker']:<6}` {r['signal']:<20} {OUTCOME_LABEL.get(r['outcome'], r['outcome'])}"
-                 for r in rows]
-        desc = "\n".join(lines[:25])
-        if len(rows) > 25:
-            desc += f"\n…and {len(rows) - 25} more"
-    else:
-        desc = "No alerts fired today."
-    fields = []
-    if tape is not None:
-        fields.append({"name": "Tape heat",
-                       "value": f"{tape:.0%} of universe above {config.RVOL_MIN_ABS:g}x RVOL",
-                       "inline": True})
-    return {
-        "title": title or f"Daily summary — {session_date}",
-        "description": desc,
-        "color": BLUE if rows else GREY,
-        "fields": fields,
-        "footer": {"text": "Outcomes are 5-minute-bar approximations; "
-                           "'both' = 1R and stop hit in the same bar"},
-    }
-
-
 def status_embed(title: str, lines: list[str]) -> dict:
+    """Neutral liveness post (morning 'scanner online'). The channel carries BUY
+    alerts and this heartbeat only -- no outcomes, no summaries, nothing red.
+    Honest win/loss accounting lives in the dashboard and `engine report`."""
     return {"title": title, "description": "\n".join(lines), "color": GREY}
 
 

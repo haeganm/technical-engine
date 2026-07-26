@@ -113,6 +113,37 @@ def ema9_vwap_pullback(df):
     return _fresh(up & tagged & _after(df, 10, 0) & (df["Close"] > df["EMA9"]))
 
 
+def _bb_width(df, bars=config.SQUEEZE_BARS) -> pd.Series:
+    """Bollinger band width (2 sigma, as a fraction of the mid)."""
+    mid = df["Close"].rolling(bars, min_periods=bars).mean()
+    sd = df["Close"].rolling(bars, min_periods=bars).std()
+    return (4 * sd) / mid
+
+
+def squeeze_breakout(df, bars=config.SQUEEZE_BARS, pctile=config.SQUEEZE_PCTILE):
+    """Volatility contraction then expansion: Bollinger width in the bottom
+    quartile of its own trailing distribution, and the close breaks the upper
+    band. The width baseline is shifted so the breakout bar never ranks itself."""
+    width = _bb_width(df, bars)
+    rank = width.shift(1).rolling(bars * 3, min_periods=bars).rank(pct=True)
+    mid = df["Close"].rolling(bars, min_periods=bars).mean()
+    sd = df["Close"].rolling(bars, min_periods=bars).std()
+    upper = (mid + 2 * sd).shift(1)          # prior bar's band, so the break is a break
+    return _fresh((rank <= pctile) & (df["Close"] > upper))
+
+
+def momentum_thrust(df, bars=config.THRUST_BARS):
+    """N consecutive higher closes, all above VWAP, on expanding range --
+    catches opening drives that never pull back for the other setups."""
+    higher = df["Close"] > df["Close"].shift(1)
+    streak = higher.rolling(bars, min_periods=bars).sum() == bars
+    above = (df["Close"] > df["VWAP"]).rolling(bars, min_periods=bars).sum() == bars
+    rng = df["High"] - df["Low"]
+    expanding = rng > rng.shift(1).rolling(20, min_periods=10).median()
+    # bar_n guard keeps the streak inside the session (no overnight carry)
+    return _fresh(streak & above & expanding & (_bar_n(df) >= bars))
+
+
 # ---------------------------------------------------------------- stops
 
 def _orb_stop(df, or_bars=config.ORB_BARS) -> float:
@@ -135,6 +166,15 @@ def _gap_stop(df) -> float:
 
 def _pullback_stop(df) -> float:
     return float(_today(df)["Low"].iloc[-3:].min())
+
+
+def _squeeze_stop(df) -> float:
+    # today's coil only -- a stop reaching into yesterday is a different trade
+    return float(_today(df)["Low"].iloc[-config.SQUEEZE_BARS:].min())
+
+
+def _thrust_stop(df) -> float:
+    return float(_today(df)["Low"].iloc[-config.THRUST_BARS:].min())
 
 
 # ---------------------------------------------------------------- context
@@ -165,6 +205,15 @@ def _pullback_context(df) -> str:
     return f"EMA9 {df['EMA9'].iloc[-1]:.2f}"
 
 
+def _squeeze_context(df) -> str:
+    return f"band width {_bb_width(df).iloc[-1]:.2%}"
+
+
+def _thrust_context(df) -> str:
+    t = df["Close"].iloc[-1] / df["Close"].iloc[-config.THRUST_BARS - 1] - 1
+    return f"thrust +{t:.2%}"
+
+
 # ---------------------------------------------------------------- registry
 
 @dataclass(frozen=True)
@@ -180,4 +229,6 @@ REGISTRY: dict[str, SignalSpec] = {
     "hod_breakout": SignalSpec(hod_breakout, _hod_stop, _hod_context),
     "gap_go": SignalSpec(gap_go, _gap_stop, _gap_context),
     "ema9_vwap_pullback": SignalSpec(ema9_vwap_pullback, _pullback_stop, _pullback_context),
+    "squeeze_breakout": SignalSpec(squeeze_breakout, _squeeze_stop, _squeeze_context),
+    "momentum_thrust": SignalSpec(momentum_thrust, _thrust_stop, _thrust_context),
 }

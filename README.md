@@ -1,10 +1,15 @@
 # TechnicalEngine
 
 A free, always-on intraday scanner for US equities. Every 5 minutes during
-market hours it pulls 5-minute bars for the Nasdaq-100, checks five classic
-day-trading long setups, and posts BUY-NOW alerts to a Discord channel with
-price, stop, and 1R/2R targets. Every alert is journaled and scored against
-what the market actually did.
+market hours it pulls 5-minute bars for the **S&P 500 + Nasdaq-100** (~590
+tickers — the full Nasdaq exchange is ~3,400 names, which free Yahoo data
+cannot sustain at this cadence), checks seven day-trading long setups, and
+posts BUY alerts to a Discord channel with price, stop, and 1R/2R targets.
+Every alert is journaled and scored against what the market actually did.
+
+The Discord channel is **buy-alerts only** (plus a morning "scanner online"
+heartbeat). Outcomes — including every loss — are tracked in the local
+dashboard (`engine serve`) and `engine report`, not posted to the channel.
 
 **This is not financial advice, and it is not a profitable system.** See
 [Does it work?](#does-it-work) — the honest answer, measured over 41 sessions,
@@ -44,15 +49,19 @@ Treat the alerts as *"go look at this chart now"*, never as trade instructions.
 | `hod_breakout` | Close above the prior high-of-day, after 10:00 ET |
 | `gap_go` | ≥2% gap up that holds its open and breaks the first bar's high |
 | `ema9_vwap_pullback` | Uptrend pullback tags EMA9, holds VWAP, bounces |
+| `squeeze_breakout` | Bollinger-width contraction (bottom quartile) then a band break |
+| `momentum_thrust` | 3 straight higher closes above VWAP on expanding range |
 
 Signals describe **structure only**. Every alert must additionally clear a
 central gate — relative volume ≥2× its own time-of-day normal, and price above
-VWAP — and score at least 2 of 4 confirmations:
+VWAP — and score enough of 6 confirmations (threshold in `config.MIN_SCORE`):
 
 - up on the day
 - RVOL ≥ 3×
 - closed in the top 40% of the bar's range
 - more than one signal firing on the same bar
+- market up (SPY above its own VWAP at the same bar)
+- relative-strength leader (day change beats SPY's)
 
 Stops come from the setup's structure, then are clamped to between 1.0 and 2.5
 ATR — raw structural stops ranged from 0.09% (noise) to 5.6% (not a day trade).
