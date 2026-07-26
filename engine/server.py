@@ -84,8 +84,8 @@ def api_summary(source: str) -> dict:
     if scored.empty:
         return {"error": "no alerts in this source yet"}
 
-    decided = scored[scored["outcome"].isin(["one_r", "stop", "ambiguous"])]
-    wins = int((decided["outcome"] == "one_r").sum())
+    decided = scored[scored["outcome"].isin(["target", "stop", "ambiguous"])]
+    wins = int((decided["outcome"] == "target").sum())
     ambig = int((decided["outcome"] == "ambiguous").sum())
     n_dec = len(decided)
     sessions = scored["session_date"].nunique()
@@ -137,7 +137,7 @@ def api_alerts(source: str) -> dict:
     return _clean_nan({"alerts": [{
         "ts": r.ts.isoformat(), "session_date": r.session_date, "ticker": r.ticker,
         "signals": r.signals, "score": int(r.score), "price": r.price, "stop": r.stop,
-        "target_1r": r.target_1r, "target_2r": r.target_2r, "rvol": r.rvol,
+        "target_1": r.target_1, "target_2": r.target_2, "rvol": r.rvol,
         "outcome": getattr(r, "outcome", None) or "unresolved",
         "fwd_eod": getattr(r, "fwd_eod", None),
     } for r in merged.itertuples(index=False)]})
@@ -172,8 +172,8 @@ def api_bars(source: str, ticker: str, date: str) -> dict:
         r = row.iloc[0]
         alert_ts = pd.Timestamp(r["ts"]).tz_convert(config.ET)
         alert = {"ts": alert_ts.isoformat(), "price": r["price"],
-                 "stop": r["stop"], "target_1r": r["target_1r"],
-                 "target_2r": r["target_2r"], "signals": r["signals"],
+                 "stop": r["stop"], "target_1": r["target_1"],
+                 "target_2": r["target_2"], "signals": r["signals"],
                  "score": int(r["score"])}
     # lightweight-charts reads epoch `time` as UTC, but traders read these charts
     # in market time -- and the alerts table beside it renders ET. Shift by the

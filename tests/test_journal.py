@@ -35,13 +35,13 @@ def test_same_bar_1r_and_stop_is_ambiguous_not_a_loss():
 
     s = journal.stats(bars=bars)
     assert s.iloc[0]["ambiguous"] == 1
-    assert s.iloc[0]["one_r_lo"] == 0.0 and s.iloc[0]["one_r_hi"] == 1.0
+    assert s.iloc[0]["win_lo"] == 0.0 and s.iloc[0]["win_hi"] == 1.0
 
 
 def test_clean_win_and_clean_loss():
     journal.append([_alert()])
     win = _bars([("10:05", 100.5, 99.8, 100.2), ("10:10", 101.5, 100.0, 101.4)])
-    assert journal.score_alerts(bars=win).iloc[0]["outcome"] == "one_r"
+    assert journal.score_alerts(bars=win).iloc[0]["outcome"] == "target"
 
     loss = _bars([("10:05", 100.2, 98.5, 98.6)])
     assert journal.score_alerts(bars=loss).iloc[0]["outcome"] == "stop"

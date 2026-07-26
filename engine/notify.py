@@ -24,13 +24,16 @@ TRADINGVIEW = "https://www.tradingview.com/chart/?symbol={ticker}"
 
 def _embed(a) -> dict:
     risk = a.price - a.stop
+    m1, m2 = config.TARGET_MULTIPLES
     title = f"BUY NOW: {a.ticker} — {a.signal}"
     if len(a.signals) > 1:
         title += f" +{len(a.signals) - 1}"
     fields = [
         {"name": "Price / Entry", "value": f"${a.price:,.2f}", "inline": True},
         {"name": "Stop", "value": f"${a.stop:,.2f}  ({a.risk_pct:.2%})", "inline": True},
-        {"name": "Targets", "value": f"1R ${a.target_1r:,.2f}\n2R ${a.target_2r:,.2f}",
+        {"name": "Targets",
+         "value": (f"{m1:g}R ${a.target_1:,.2f}  (+{(a.target_1 / a.price - 1):.1%})\n"
+                   f"{m2:g}R ${a.target_2:,.2f}  (+{(a.target_2 / a.price - 1):.1%})"),
          "inline": True},
         {"name": "Risk / share", "value": f"${risk:,.2f}", "inline": True},
         {"name": "RVOL", "value": f"{a.rvol:.1f}x", "inline": True},

@@ -4,7 +4,7 @@ A free, always-on intraday scanner for US equities. Every 5 minutes during
 market hours it pulls 5-minute bars for the **S&P 500 + Nasdaq-100** (506
 tickers — the full Nasdaq exchange is ~3,400 names, which free Yahoo data
 cannot sustain at this cadence), checks five day-trading long setups, and
-posts BUY alerts to a Discord channel with price, stop, and 1R/2R targets.
+posts BUY alerts to a Discord channel with price, stop, and 2R/3R targets.
 Every alert is journaled and scored against what the market actually did.
 
 The Discord channel is **buy-alerts only** (plus a morning "scanner online"
@@ -26,23 +26,28 @@ diluted by the first ~10 sessions, which produce nothing while the RVOL
 baseline fills). The busiest single 5-minute cycle observed was 127 alerts,
 which posts as 13 Discord messages over ~13 seconds:
 
-| signal | decided | win rate | first half | second half |
-|---|---|---|---|---|
-| gap_go | 130 | 56.9% | 56.4% | **57.7%** |
-| vwap_reclaim | 965 | 50.1% | 54.2% | 45.8% |
-| orb_breakout | 1,463 | 48.4% | 52.1% | 44.0% |
-| momentum_thrust | 991 | 46.3% | 49.9% | 42.5% |
-| ema9_vwap_pullback | 1,352 | 45.6% | 48.3% | 43.7% |
+Targets are **2R**, so breakeven needs a win rate above **33.3%**. `exp_r` is
+expectancy in R — the only figure comparable across target settings, and the
+one that has to be positive:
 
-At 1:1 reward:risk you need **more than 50% plus costs** to break even. Three
-things were tested and each came back negative:
+| signal | decided | win rate | exp_r | first half | second half |
+|---|---|---|---|---|---|
+| gap_go | 107 | 34.6% | **+0.030** | 34.3% | 35.0% |
+| vwap_reclaim | 879 | 32.7% | −0.018 | 36.3% | 28.7% |
+| orb_breakout | 1,091 | 25.3% | −0.151 | 30.3% | 19.4% |
+| ema9_vwap_pullback | 1,236 | 26.3% | −0.186 | 28.8% | 24.0% |
+| momentum_thrust | 833 | 25.0% | −0.190 | 27.6% | 22.6% |
+
+Overall: **−748R over 5,400 alerts** (−0.139R each; 30.8% win in the first half,
+23.7% in the second). Three things were tested and each came back negative:
 
 - **Wider targets do not rescue it.** Sweeping exit multiples over every alert:
-  1R −383R, 1.5R −488R, 2R −603R, 3R −767R. The win rate falls faster than the
-  payoff rises (2R needs 33%, delivers 27.3%), so wider targets lose *more*.
+  1R −226R, 1.5R −200R, 2R −247R, 3R −295R. The win rate falls faster than the
+  payoff rises (2R needs 33.3%, delivers 27.3%), so wider targets lose *more*.
+  The shipped 2R setting was chosen for the shape of the alert, not for edge.
 - **No sub-population survives split-half validation.** Hour of day, price
   bucket, and confluence score were all sliced; with n≥100 in both halves,
-  **nothing** clears 50% in both.
+  **nothing** clears the breakeven bar in both.
 - **Tuning does not transfer.** A grid over signal sets × threshold found every
   configuration in the 50–100 alerts/day band lands at **44.5–45.3%
   out-of-sample**, while first-half figures spread 50.1–51.8%. That spread is
@@ -55,11 +60,12 @@ criterion available. Fixing `squeeze_breakout`'s session-boundary bug made it
 measurably worse (47.6% → 43.7%): it had been scoring overnight gaps, not
 volatility coils.
 
-`gap_go` is the one setup that is above 50% in both halves and barely moves
-between them (+1.3%). At ~2 alerts/day and 130 decided trades it is far too
-thin to build on — interesting, not proven. Everything else decays into the
-second half by 4–8 points, which is one regime effect rather than four
-independent failures.
+`gap_go` is the one setup with **positive expectancy** (+0.030R) that also
+holds up across both halves (34.3% → 35.0%, the only signal that does not
+decay). At ~2 alerts/day and 107 decided trades it is far too thin to build on
+— interesting, not proven, and a single bad month would erase it. Everything
+else decays into the second half by 5–11 points, which is one regime effect
+rather than four independent failures.
 
 Treat the alerts as *"go look at this chart now"*, never as trade instructions.
 
@@ -140,7 +146,7 @@ pytest                                      99 tests, offline, ~60s
 `python -m engine serve` opens a local, read-only dashboard (no accounts, no
 external requests — the chart library is vendored): cumulative-R equity curve,
 win-rate tiles, per-signal and stability tables, and a click-through candlestick
-chart for every alert with VWAP and the entry/stop/1R/2R levels drawn on it.
+chart for every alert with VWAP and the entry/stop/target levels drawn on it.
 
 ## The two backtest tiers
 

@@ -93,7 +93,7 @@ function renderSummary(s) {
     ["Win rate (decided)", s.win_lo === s.win_hi ? fmtPct(s.win_lo)
         : `${fmtPct(s.win_lo)}–${fmtPct(s.win_hi)}`, `${s.decided} decided`],
     ["Alerts", String(s.alerts), `${s.per_day}/day over ${s.sessions} sessions`],
-    ["Ambiguous", String(s.ambiguous), "1R and stop in the same bar"],
+    ["Ambiguous", String(s.ambiguous), "target and stop in the same bar"],
     ["Open at close", String(s.open), "neither target nor stop hit"],
     ["Unresolved", String(s.unresolved), "bars aged out of the store"],
   ];
@@ -130,7 +130,7 @@ function drawCumChart(points, up) {
 }
 
 function renderStatsTable(el, bySignal, byScore) {
-  const cols = ["n", "decided", "one_r", "stopped", "ambiguous", "open", "win_lo", "win_hi"];
+  const cols = ["n", "decided", "target", "stopped", "ambiguous", "open", "exp_r", "win_lo", "win_hi"];
   const head = ["", ...cols];
   const fmt = (row, c) => (c === "win_lo" || c === "win_hi")
       ? (row.n >= 20 ? fmtPct(row[c]) : "n<20") : String(row[c] ?? "–");
@@ -174,7 +174,7 @@ function renderAlerts() {
   const rows = state.alerts.filter(a => !state.sigFilter || a.signals.split(",").includes(state.sigFilter));
   const tb = $("alerts").querySelector("tbody");
   tb.innerHTML = "";
-  const OUTCOME = { one_r: "hit 1R", stop: "stopped", ambiguous: "both same bar",
+  const OUTCOME = { target: "hit target", stop: "stopped", ambiguous: "both same bar",
                     open: "open", unresolved: "unresolved" };
   for (const a of rows.slice(0, 400)) {
     const t = new Date(a.ts);
@@ -184,7 +184,7 @@ function renderAlerts() {
       `<td>${a.ticker}</td><td>${a.session_date}</td>` +
       `<td>${t.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" })}</td>` +
       `<td>${a.signals.replaceAll(",", " + ")}</td><td>${a.score}</td>` +
-      `<td>${a.price.toFixed(2)}</td><td>${a.stop.toFixed(2)}</td><td>${a.target_1r.toFixed(2)}</td>` +
+      `<td>${a.price.toFixed(2)}</td><td>${a.stop.toFixed(2)}</td><td>${a.target_1.toFixed(2)}</td>` +
       `<td><span class="badge"><span class="dot ${a.outcome}"></span>${OUTCOME[a.outcome] || a.outcome}</span></td>` +
       `<td>${eod}</td>`;
     tr.onclick = () => openDetail(a);
@@ -201,7 +201,7 @@ async function openDetail(a) {
     $("dTicker").textContent = a.ticker;
     $("dMeta").textContent =
       `${a.session_date} · ${a.signals.replaceAll(",", " + ")} · score ${a.score} · ` +
-      `entry ${a.price.toFixed(2)} · stop ${a.stop.toFixed(2)} · 1R ${a.target_1r.toFixed(2)} · 2R ${a.target_2r.toFixed(2)}`;
+      `entry ${a.price.toFixed(2)} · stop ${a.stop.toFixed(2)} · T1 ${a.target_1.toFixed(2)} · T2 ${a.target_2.toFixed(2)}`;
     $("candles").innerHTML = "";
     const chart = LightweightCharts.createChart($("candles"), {
       ...CHART_BASE, height: 340, autoSize: true,
@@ -230,8 +230,8 @@ async function openDetail(a) {
         axisLabelVisible: true });
       line(d.alert.price, "entry", COLORS.ink2);
       line(d.alert.stop, "stop", COLORS.down);
-      line(d.alert.target_1r, "1R", COLORS.up);
-      line(d.alert.target_2r, "2R", COLORS.up);
+      line(d.alert.target_1, "T1", COLORS.up);
+      line(d.alert.target_2, "T2", COLORS.up);
     }
     // crosshair OHLC readout (the hover layer)
     chart.subscribeCrosshairMove(p => {

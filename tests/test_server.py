@@ -79,8 +79,8 @@ def test_summary_refreshes_when_the_journal_changes(frames):
 
     extra = [a for a in alerts][:1]
     moved = [scanner.Alert(
-        "ZZZZ", a.signals, a.score, a.ts, a.price, a.stop, a.target_1r,
-        a.target_2r, a.rvol, a.atr, a.day_change) for a in extra]
+        "ZZZZ", a.signals, a.score, a.ts, a.price, a.stop, a.target_1,
+        a.target_2, a.rvol, a.atr, a.day_change) for a in extra]
     journal.append(moved, "journal_replay")
 
     assert server.api_summary("replay_5m")["alerts"] == first + 1

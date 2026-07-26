@@ -42,7 +42,7 @@ def test_alert_invariants_hold_on_the_fixture(prep, all_ts, frames):
     for as_of in all_ts[-60:]:
         for a in scanner.scan_prepared(prep, as_of, min_score=0):
             seen += 1
-            assert a.stop < a.price < a.target_1r < a.target_2r
+            assert a.stop < a.price < a.target_1 < a.target_2
             assert a.rvol >= config.RVOL_MIN_ABS
             assert a.price == round(float(frames[a.ticker].loc[as_of, "Close"]), 2)
             assert a.ts == as_of

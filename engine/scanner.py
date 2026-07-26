@@ -24,8 +24,8 @@ class Alert:
     ts: pd.Timestamp
     price: float          # the alert bar's close -- also the assumed entry
     stop: float
-    target_1r: float
-    target_2r: float
+    target_1: float       # config.TARGET_MULTIPLES[0] * R above price
+    target_2: float       # config.TARGET_MULTIPLES[1] * R above price
     rvol: float
     atr: float
     day_change: float | None
@@ -208,8 +208,8 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
             ts=as_of,
             price=round(price, 2),
             stop=round(price - r, 2),
-            target_1r=round(price + r, 2),
-            target_2r=round(price + 2 * r, 2),
+            target_1=round(price + config.TARGET_MULTIPLES[0] * r, 2),
+            target_2=round(price + config.TARGET_MULTIPLES[1] * r, 2),
             rvol=round(float(last["RVOL"]), 2),
             atr=round(atr_now, 3),
             day_change=(None if prev_close is None

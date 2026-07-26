@@ -43,7 +43,7 @@ def append(alerts, name: str = LIVE, delivered: set | None = None) -> None:
         "ts": a.ts, "session_date": str(a.ts.date()), "ticker": a.ticker,
         "signal": a.signal, "signals": ",".join(a.signals), "score": a.score,
         "price": a.price, "stop": a.stop,
-        "target_1r": a.target_1r, "target_2r": a.target_2r,
+        "target_1": a.target_1, "target_2": a.target_2,
         "rvol": a.rvol, "atr": a.atr, "created_at": now,
         "delivered": True if delivered is None else (a.key() in delivered),
     } for a in alerts])
@@ -81,7 +81,8 @@ def clear(name: str = REPLAY) -> None:
 def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per journaled alert with its realized outcome. One schema, always.
 
-    Outcomes: one_r | stop | ambiguous | open | unresolved.
+    Outcomes: target | stop | ambiguous | open | unresolved. `r_result` is the
+    R actually achieved, so it tracks TARGET_MULTIPLES rather than assuming 1R.
     """
     cols = ["session_date", "ticker", "signal", "score", "ts", "price",
             "outcome", "r_result", "fwd_30m", "fwd_60m", "fwd_eod", "reason"]
@@ -126,28 +127,35 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
                 base[label] = float(later.iloc[0] / a.price - 1)
         base["fwd_eod"] = float(close.iloc[-1] / a.price - 1)
 
-        hit_1r = (after["High"] >= a.target_1r).to_numpy()
+        hit_target = (after["High"] >= a.target_1).to_numpy()
         hit_stop = (after["Low"] <= a.stop).to_numpy()
-        i_1r = int(hit_1r.argmax()) if hit_1r.any() else None
+        i_tgt = int(hit_target.argmax()) if hit_target.any() else None
         i_stop = int(hit_stop.argmax()) if hit_stop.any() else None
-        if i_1r is None and i_stop is None:
+        if i_tgt is None and i_stop is None:
             base["outcome"] = "open"
-        elif i_stop is None or (i_1r is not None and i_1r < i_stop):
-            base["outcome"] = "one_r"
-        elif i_1r is None or i_stop < i_1r:
+        elif i_stop is None or (i_tgt is not None and i_tgt < i_stop):
+            base["outcome"] = "target"
+        elif i_tgt is None or i_stop < i_tgt:
             base["outcome"] = "stop"
         else:
             base["outcome"] = "ambiguous"  # same bar -- intrabar order unknowable
+        # R actually achieved. A win pays the target's OWN multiple, recovered
+        # from the alert's own levels rather than assumed -- so a journal
+        # written under a different TARGET_MULTIPLES still scores correctly.
+        risk = a.price - a.stop
+        base["r_win"] = (a.target_1 - a.price) / risk if risk > 0 else np.nan
         rows.append(base)
     out = pd.DataFrame(rows)
-    # +1R on a win, -1R on a stop, 0 otherwise -- the frontend's equity curve
-    out["r_result"] = out["outcome"].map({"one_r": 1.0, "stop": -1.0}).fillna(0.0)
+    if "r_win" not in out.columns:      # every alert unresolved
+        out["r_win"] = np.nan
+    out["r_result"] = np.where(out["outcome"] == "target", out["r_win"].fillna(0.0),
+                               np.where(out["outcome"] == "stop", -1.0, 0.0))
     return out[cols]
 
 
 def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None,
           scored: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Aggregate outcomes. `one_r_lo/hi` bracket the same-bar ambiguity.
+    """Aggregate outcomes. `win_lo/hi` bracket the same-bar ambiguity.
 
     Pass `scored` to reuse a single score_alerts pass across several tables --
     scoring groups the whole bars store, which is millions of rows.
@@ -161,7 +169,7 @@ def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None
     grp = resolved.groupby(by, dropna=False)
     out = pd.DataFrame({
         "n": grp.size(),
-        "one_r": grp["outcome"].apply(lambda s: (s == "one_r").sum()),
+        "target": grp["outcome"].apply(lambda s: (s == "target").sum()),
         "stopped": grp["outcome"].apply(lambda s: (s == "stop").sum()),
         "ambiguous": grp["outcome"].apply(lambda s: (s == "ambiguous").sum()),
         "open": grp["outcome"].apply(lambda s: (s == "open").sum()),
@@ -169,15 +177,16 @@ def stats(name: str = LIVE, by: str = "signal", bars: pd.DataFrame | None = None
         "avg_fwd_60m": grp["fwd_60m"].mean().round(4),
         "avg_fwd_eod": grp["fwd_eod"].mean().round(4),
     })
-    # Rate among trades that actually resolved to 1R or a stop. The `open`
-    # bucket (neither touched by the close) is not a loss, so including it in
-    # the denominator understates every signal.
-    decided = out["one_r"] + out["stopped"] + out["ambiguous"]
+    # Rate among trades that actually resolved to the target or a stop. The
+    # `open` bucket (neither touched by the close) is not a loss, so including
+    # it in the denominator understates every signal.
+    decided = out["target"] + out["stopped"] + out["ambiguous"]
     out["decided"] = decided
-    out["win_lo"] = (out["one_r"] / decided.replace(0, np.nan)).round(3)
-    out["win_hi"] = ((out["one_r"] + out["ambiguous"]) / decided.replace(0, np.nan)).round(3)
-    out["one_r_lo"] = (out["one_r"] / out["n"]).round(3)
-    out["one_r_hi"] = ((out["one_r"] + out["ambiguous"]) / out["n"]).round(3)
+    out["win_lo"] = (out["target"] / decided.replace(0, np.nan)).round(3)
+    out["win_hi"] = ((out["target"] + out["ambiguous"]) / decided.replace(0, np.nan)).round(3)
+    # Expectancy in R. With a loftier target the win rate falls but each win
+    # pays more, so the win rate alone stops being comparable across settings.
+    out["exp_r"] = grp["r_result"].mean().round(3)
     unresolved = scored[scored["outcome"] == "unresolved"].groupby(by, dropna=False).size()
     out["unresolved"] = unresolved.reindex(out.index).fillna(0).astype(int)
     return out.reset_index()
@@ -195,10 +204,10 @@ def stability(name: str = REPLAY, by: str = "signal", n_splits: int = 2,
     scored = score_alerts(name, bars=bars) if scored is None else scored
     if scored.empty:
         return pd.DataFrame()
-    d = scored[scored["outcome"].isin(["one_r", "stop", "ambiguous"])].copy()
+    d = scored[scored["outcome"].isin(["target", "stop", "ambiguous"])].copy()
     if d.empty:
         return pd.DataFrame()
-    d["win"] = d["outcome"].isin(["one_r", "ambiguous"])
+    d["win"] = d["outcome"].isin(["target", "ambiguous"])
     days = sorted(d["session_date"].unique())
     if len(days) < 2 * n_splits:
         return pd.DataFrame()
@@ -227,7 +236,8 @@ def format_stability(df: pd.DataFrame) -> str:
     return d.to_string(index=False)
 
 
-COLUMNS = ["n", "decided", "one_r", "stopped", "ambiguous", "open",
+COLUMNS = ["n", "decided", "target", "stopped", "ambiguous", "open",
+           "exp_r",
            "win_lo", "win_hi", "avg_fwd_30m", "avg_fwd_eod", "unresolved"]
 
 

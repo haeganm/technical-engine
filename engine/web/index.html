@@ -64,7 +64,7 @@
 
   .badge { display: inline-flex; align-items: center; gap: 6px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .dot.one_r { background: var(--up); } .dot.stop { background: var(--down); }
+  .dot.target { background: var(--up); } .dot.stop { background: var(--down); }
   .dot.ambiguous { background: var(--muted); } .dot.open { background: var(--accent); }
   .dot.unresolved { background: none; border: 1px solid var(--muted); }
 
@@ -93,7 +93,7 @@
 
 <div class="hero">
   <div class="num" id="totalR">–</div>
-  <div class="sub" id="heroSub">cumulative R (each alert risks 1R; +1 win, −1 stop, 0 otherwise)</div>
+  <div class="sub" id="heroSub">cumulative R (each alert risks 1R; a win pays the target multiple, a stop pays −1)</div>
 </div>
 <div id="cumchart"></div>
 
@@ -106,14 +106,14 @@
   </div>
   <div id="candles"></div>
   <div id="ohlc"></div>
-  <div class="key">line <i style="color:var(--accent)">■</i> VWAP · dashed lines: entry / stop / 1R / 2R · marker = alert bar</div>
+  <div class="key">line <i style="color:var(--accent)">■</i> VWAP · dashed lines: entry / stop / targets · marker = alert bar</div>
 </div>
 
 <h2>Alerts</h2>
 <div class="pills" id="sigfilter" style="margin-bottom:8px"></div>
 <div class="scroll"><table id="alerts">
   <thead><tr><th>Ticker</th><th>Date</th><th>Time</th><th>Signals</th><th>Score</th>
-      <th>Price</th><th>Stop</th><th>1R</th><th>Outcome</th><th>EOD</th></tr></thead>
+      <th>Price</th><th>Stop</th><th>Target</th><th>Outcome</th><th>EOD</th></tr></thead>
   <tbody></tbody>
 </table></div>
 
@@ -124,9 +124,10 @@
 <div class="scroll"><table id="stability"></table></div>
 
 <p class="foot">
-  Win rate is among decided trades (1R or stop hit); the lo–hi band brackets bars where
-  both were hit in the same bar, whose order is unknowable at this resolution.
-  At 1:1 reward:risk you need &gt;50% plus costs to break even. A win rate that swings
+  Win rate is among decided trades (target or stop hit); the lo–hi band brackets bars
+  where both were hit in the same bar, whose order is unknowable at this resolution.
+  <b>exp_r</b> is expectancy in R and is the number to compare across target settings —
+  a loftier target lowers the win rate while paying more per win. A win rate that swings
   between time slices is tracking the market regime, not an edge. The 1h source runs
   the same signal ideas on hourly bars as a long-history proxy — it is not a
   measurement of the live 5m system. Not financial advice.<br>

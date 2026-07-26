@@ -103,6 +103,16 @@ MIN_SCORE = 4          # measured: ~99 alerts/day median, 47.2% win (43.9% 2nd h
 MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
 MAX_STOP_ATR = 2.5      # clamp: a stop wider than 2.5 ATR is not a day trade
 ATR_PERIOD = 14
+# Take-profit levels, as multiples of the risk (R). The FIRST one is what the
+# journal scores a win against, so changing it changes what "hit" means in
+# every table -- r_result credits the multiple actually achieved.
+#
+# Measured over 60 sessions, sweeping the first target (total R / hit rate):
+#   1.0R -226 / 43.5%   1.5R -200 / 30.7%   2.0R -247 / 21.0%   3.0R -295 / 10.1%
+# Every multiple is negative and the hit rate falls faster than the payoff
+# rises, so a loftier target does not buy expectancy -- it trades many small
+# wins for few big ones. Chosen for the shape of the alert, not for edge.
+TARGET_MULTIPLES = (2.0, 3.0)
 
 # ---------------------------------------------------------------- signals
 # ORB_BARS and PREV_SESSION_MIN_BARS are derived from the interval profile above

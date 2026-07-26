@@ -78,7 +78,7 @@ def webhook_or_exit() -> str:
 def _describe(a) -> str:
     return (f"{a.ts:%Y-%m-%d %H:%M} {a.ticker:<6} {'+'.join(a.signals):<34} "
             f"score {a.score}  px {a.price:.2f}  stop {a.stop:.2f}  "
-            f"1R {a.target_1r:.2f}  rvol {a.rvol:.1f}")
+            f"T1 {a.target_1:.2f}  rvol {a.rvol:.1f}")
 
 
 # ---------------------------------------------------------------- commands
@@ -302,10 +302,14 @@ def cmd_backtest(days: int | None = None, min_score: int = config.MIN_SCORE,
     if interval != "5m":
         print("NOTE: this tier runs the same signal IDEAS on hourly bars -- a proxy\n"
               "for regime coverage, not a measurement of the live 5m system.")
+    m1 = config.TARGET_MULTIPLES[0]
     print("Read the stability table before believing anything above it. A win rate\n"
           "that swings between slices is tracking the market regime, not an edge --\n"
           "and picking a threshold from the better slice is how a backtest lies.\n"
-          "At 1:1 reward:risk you need >50% plus costs to break even.")
+          f"Targets are {m1:g}R, so breakeven needs a win rate above "
+          f"{100 / (1 + m1):.0f}% plus costs.\n"
+          "exp_r is expectancy in R and is the only figure comparable across\n"
+          "different target settings -- positive is the bar, not a high win rate.")
 
 
 def cmd_report(by: str = "signal", interval: str = "5m", replay: bool = False) -> None:
@@ -329,8 +333,8 @@ def cmd_test_webhook() -> None:
     dummies = [
         scanner.Alert(ticker=f"TST{i}", signals=("orb_breakout",) if i % 2 else
                       ("orb_breakout", "hod_breakout"), score=3, ts=ts,
-                      price=100.0 + i, stop=99.0 + i, target_1r=102.0 + i,
-                      target_2r=104.0 + i, rvol=2.5, atr=0.5, day_change=0.012,
+                      price=100.0 + i, stop=99.0 + i, target_1=102.0 + i,
+                      target_2=104.0 + i, rvol=2.5, atr=0.5, day_change=0.012,
                       context=("up on day", "closed strong"))
         for i in range(12)  # 12 > 10 embeds, so this also proves batching
     ]
