@@ -19,6 +19,10 @@ log = logging.getLogger("engine")
 CONFIG_ERROR = 2
 
 
+class FetchStarved(RuntimeError):
+    """Too few tickers returned bars -- almost always Yahoo throttling us."""
+
+
 def setup_logging(verbose: bool = False) -> None:
     config.DATA.mkdir(exist_ok=True)
     # Windows consoles default to cp437/cp1252 and raise on any non-ASCII we log
@@ -37,6 +41,13 @@ def setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S", handlers=handlers, force=True)
+    # yfinance logs one ERROR per failed symbol per call. At 506 tickers a bad
+    # Yahoo day writes ~5 MB and rotates the whole log window away in days --
+    # destroying the cycle history you need to diagnose the outage. Our own
+    # aggregate "fetch: N/M tickers returned usable bars" line carries the
+    # signal; the per-symbol spam carries none.
+    if not verbose:
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 def now_et() -> pd.Timestamp:
@@ -88,10 +99,16 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
            dry_run: bool) -> list:
     """One scan: fetch -> store -> scan the store -> dispatch -> journal."""
     t0 = time.monotonic()
+    p = config.LIVE
     frames = data.fetch_intraday(tickers)
-    data.store_bars(frames)
+    if len(frames) < len(tickers) * config.FETCH_OK_FRACTION:
+        # yfinance swallows rate limits into empty frames and returns normally,
+        # so a near-empty fetch IS the throttle signal. Raising here reaches the
+        # loop's backoff instead of quietly scanning nothing every 5 minutes.
+        raise FetchStarved(f"only {len(frames)}/{len(tickers)} tickers returned bars")
+    data.store_bars(frames, store=p["store"], keep_days=p["keep_days"])
     stored = data.load_frames(
-        since=as_of - pd.Timedelta(days=config.LIVE_LOOKBACK_DAYS))
+        since=as_of - pd.Timedelta(days=config.LIVE_LOOKBACK_DAYS), store=p["store"])
     alerts = scanner.scan_once(stored, as_of)
 
     if dry_run:
@@ -107,10 +124,11 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
 
     at_as_of = sum(1 for df in stored.values()
                    if len(df) and df.index[-1] == as_of)
-    log.info("cycle as_of=%s fetched=%d in_store=%d at_bar=%d alerts=%d sent=%d "
-             "sessions=%d elapsed=%.1fs",
+    # store_sessions() is a full parquet read; it changes once a day, so it is
+    # not worth 0.5-1.5s on every cycle just to print it.
+    log.info("cycle as_of=%s fetched=%d in_store=%d at_bar=%d alerts=%d sent=%d elapsed=%.1fs",
              as_of.strftime("%Y-%m-%d %H:%M"), len(frames), len(stored), at_as_of,
-             len(alerts), len(fired), data.store_sessions(), time.monotonic() - t0)
+             len(alerts), len(fired), time.monotonic() - t0)
     elapsed = time.monotonic() - t0
     if stored and at_as_of < len(stored) * 0.5:
         log.warning("only %d/%d tickers have a bar at %s — data may be lagging",
@@ -123,8 +141,9 @@ def _cycle(tickers: list[str], as_of: pd.Timestamp, sent: set, url: str | None,
 def _post_close(tickers: list[str]) -> None:
     """Final fetch only -- captures the true 15:55 bar in the store.
     Nothing is posted: the channel is BUY alerts (+ morning heartbeat) only."""
+    p = config.LIVE
     frames = data.fetch_intraday(tickers)
-    data.store_bars(frames)
+    data.store_bars(frames, store=p["store"], keep_days=p["keep_days"])
     log.info("post-close fetch stored the final bars")
 
 
@@ -169,32 +188,38 @@ def cmd_run(once: bool = False, dry_run: bool = False) -> None:
     opened_for = None
     backoff = 0
     while True:
-        now = now_et()
-        today = str(now.date())
-        if seeded_for != today:
-            sent = journal.sent_keys(today)
-            seeded_for = today
-            log.info("session %s: %d alert(s) already sent today", today, len(sent))
-        if not market_open(now):
-            if (closed_for != today and now.weekday() < 5
-                    and now.time() >= config.MARKET_CLOSE):
-                _post_close(tickers)
-                closed_for = today
-            time.sleep(300)
-            continue
-        if opened_for != today:
-            _post_open_status(url, tickers, dry_run)
-            opened_for = today
+        # Everything is inside the guard: a locked parquet (the dashboard holds
+        # one open) or a blip in the post-close fetch must not end the process.
+        # Under pythonw there is no stdout, so an escaping exception would
+        # vanish without a traceback and the scanner would just be gone.
         try:
+            now = now_et()
+            today = str(now.date())
+            if seeded_for != today:
+                sent = journal.sent_keys(today)
+                seeded_for = today
+                log.info("session %s: %d alert(s) already sent today", today, len(sent))
+            if not market_open(now):
+                if (closed_for != today and now.weekday() < 5
+                        and now.time() >= config.MARKET_CLOSE):
+                    _post_close(tickers)
+                    closed_for = today
+                time.sleep(300)
+                continue
+            if opened_for != today:
+                _post_open_status(url, tickers, dry_run)
+                opened_for = today
             _cycle(tickers, scanner.last_closed_bar(now), sent, url, dry_run)
             backoff = 0
         except Exception as e:
-            if e.__class__.__name__ == "YFRateLimitError":
+            starved = isinstance(e, FetchStarved) or e.__class__.__name__ == "YFRateLimitError"
+            if starved:
                 backoff = min(backoff * 2 or 5, 60)
-                log.warning("yfinance rate-limited; backing off %d min", backoff)
+                log.warning("fetch starved (%s); backing off %d min", e, backoff)
                 time.sleep(backoff * 60)
                 continue
             log.exception("cycle failed")
+            time.sleep(30)
         now = now_et()
         time.sleep(max((next_wake(now) - now).total_seconds(), 5))
 

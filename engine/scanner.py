@@ -9,7 +9,6 @@ judged on a stale one.
 import math
 from dataclasses import dataclass, field
 
-import numpy as np
 import pandas as pd
 
 from . import config
@@ -56,10 +55,32 @@ def enrich(df: pd.DataFrame, ema_period: int = 9) -> pd.DataFrame:
 
 
 def _signal_kwargs(profile: dict) -> dict[str, dict]:
-    """Per-signal overrides derived from the interval profile."""
+    """Per-signal overrides derived from the interval profile.
+
+    Every signal with an interval-sensitive window must appear here, otherwise
+    it silently reads the 5m constants and computes something meaningless at
+    another interval while still reporting backtest numbers.
+    """
     return {
         "orb_breakout": {"or_bars": profile["orb_bars"]},
         "gap_go": {"min_prev_bars": profile["prev_session_min_bars"]},
+        "squeeze_breakout": {"bars": profile["squeeze_bars"]},
+        "momentum_thrust": {"bars": profile["thrust_bars"]},
+    }
+
+
+def active_signals(profile: dict) -> list[str]:
+    """Registry order, minus signals this interval cannot express."""
+    disabled = set(profile.get("disabled", ()))
+    return [n for n in REGISTRY if n not in disabled]
+
+
+def _stop_kwargs(profile: dict) -> dict[str, dict]:
+    """Window overrides for the stop/context functions (same rule as the fns)."""
+    return {
+        "orb_breakout": {"or_bars": profile["orb_bars"]},
+        "squeeze_breakout": {"bars": profile["squeeze_bars"]},
+        "momentum_thrust": {"bars": profile["thrust_bars"]},
     }
 
 
@@ -109,15 +130,16 @@ def prepare(frames: dict[str, pd.DataFrame],
     it turns a bar-by-bar backtest from hours into seconds, because each bar
     becomes a row lookup instead of a full recomputation.
     """
-    profile = profile or config.INTERVALS["5m"]
+    profile = profile or config.LIVE
     sig_kw = _signal_kwargs(profile)
+    names = active_signals(profile)
     out = {}
     for ticker, raw in frames.items():
         if len(raw) < config.MIN_BARS:
             continue
         df = enrich(raw, ema_period=profile["ema_period"])
         masks = pd.DataFrame(
-            {name: spec.fn(df, **sig_kw.get(name, {})) for name, spec in REGISTRY.items()},
+            {n: REGISTRY[n].fn(df, **sig_kw.get(n, {})) for n in names},
             index=df.index)
         out[ticker] = Prepared(
             df=df, masks=masks,
@@ -167,17 +189,17 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
 
         df = p.df.iloc[:pos + 1]
         price = float(last["Close"])
-        orb_kw = {"or_bars": p.profile["orb_bars"]}
+        stop_kw = _stop_kwargs(p.profile)
         # widest structural stop among co-firing setups, then clamped to a sane
         # ATR band -- raw stops range from 0.09% (noise) to 5.6% (not a day trade)
-        stop = min(REGISTRY[name].stop(df, **(orb_kw if name == "orb_breakout" else {}))
-                   for name in fired)
+        stop = min(REGISTRY[name].stop(df, **stop_kw.get(name, {})) for name in fired)
         r = price - stop
-        if not math.isfinite(r):
+        # Reject a bad structural stop BEFORE clamping. The clamp would happily
+        # turn a negative r into a plausible-looking 1-ATR risk, which is how a
+        # broken stop() function hides from every invariant test.
+        if not (math.isfinite(r) and r > 0):
             continue
         r = min(max(r, config.MIN_STOP_ATR * atr_now), config.MAX_STOP_ATR * atr_now)
-        if not r > 0:
-            continue
 
         alerts.append(Alert(
             ticker=ticker,
@@ -193,8 +215,7 @@ def scan_prepared(prep: dict[str, "Prepared"], as_of: pd.Timestamp,
             day_change=(None if prev_close is None
                         else round(price / prev_close - 1, 4)),
             context=tuple(why) + tuple(
-                REGISTRY[name].context(df, **(orb_kw if name == "orb_breakout" else {}))
-                for name in fired),
+                REGISTRY[name].context(df, **stop_kw.get(name, {})) for name in fired),
         ))
     return alerts
 
@@ -208,19 +229,3 @@ def scan_once(frames: dict[str, pd.DataFrame], as_of: pd.Timestamp,
 def last_closed_bar(now: pd.Timestamp, bar_minutes: int = config.BAR_MINUTES) -> pd.Timestamp:
     """The most recent bar whose interval has fully elapsed."""
     return now.floor(f"{bar_minutes}min") - pd.Timedelta(minutes=bar_minutes)
-
-
-def universe_rvol_pctile(frames: dict[str, pd.DataFrame], as_of: pd.Timestamp) -> float:
-    """Share of the universe clearing the RVOL floor -- a tape-heat readout for
-    the daily summary. Not a gate: rank(pct) always hands the hottest ticker
-    1.0, so a percentile gate passes something on even a dead tape."""
-    vals = []
-    for raw in frames.values():
-        df = raw[raw.index <= as_of]
-        if len(df) >= config.MIN_BARS and df.index[-1] == as_of:
-            v = rvol_tod(df).iloc[-1]
-            if np.isfinite(v):
-                vals.append(v)
-    if not vals:
-        return 0.0
-    return float(np.mean([v >= config.RVOL_MIN_ABS for v in vals]))

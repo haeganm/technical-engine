@@ -18,7 +18,6 @@ from . import config
 log = logging.getLogger(__name__)
 
 GREEN = 0x2ECC71
-BLUE = 0x3498DB
 GREY = 0x95A5A6
 TRADINGVIEW = "https://www.tradingview.com/chart/?symbol={ticker}"
 

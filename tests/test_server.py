@@ -11,9 +11,9 @@ from engine import config, data, journal, scanner, server
 @pytest.fixture(autouse=True)
 def tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA", tmp_path)
-    server._scored.cache_clear()
+    server._scored_cached.cache_clear()
     yield tmp_path
-    server._scored.cache_clear()
+    server._scored_cached.cache_clear()
 
 
 def _seed(frames):
@@ -68,6 +68,35 @@ def test_bars_errors_are_specific(frames):
     t = next(iter(frames))
     assert "error" in server.api_bars("replay_5m", t, "1999-01-01")
     assert "error" in server.api_bars("replay_5m", t, "garbage")
+
+
+def test_summary_refreshes_when_the_journal_changes(frames):
+    """Regression: the score cache was keyed on the source name alone, so a
+    dashboard left open served a frozen snapshot forever while the header
+    alert count moved -- the most misleading failure shape available."""
+    alerts = _seed(frames)
+    first = server.api_summary("replay_5m")["alerts"]
+
+    extra = [a for a in alerts][:1]
+    moved = [scanner.Alert(
+        "ZZZZ", a.signals, a.score, a.ts, a.price, a.stop, a.target_1r,
+        a.target_2r, a.rvol, a.atr, a.day_change) for a in extra]
+    journal.append(moved, "journal_replay")
+
+    assert server.api_summary("replay_5m")["alerts"] == first + 1
+
+
+def test_bars_are_served_on_the_same_clock_the_table_shows(frames):
+    """Regression: bars went out as raw UTC epochs while the alerts table
+    rendered ET, so a 10:05 ET alert plotted at 14:05."""
+    _seed(frames)
+    a = server.api_alerts("replay_5m")["alerts"][0]
+    d = server.api_bars("replay_5m", a["ticker"], a["session_date"])
+    import datetime as dt
+    first = dt.datetime.fromtimestamp(d["bars"][0]["time"], dt.UTC)
+    assert first.hour == 9 and first.minute == 30, f"session should open 09:30, got {first}"
+    # the BUY marker must sit on a real bar of that chart
+    assert d["alertTime"] in {b["time"] for b in d["bars"]}
 
 
 def test_http_smoke(frames):

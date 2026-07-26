@@ -113,35 +113,55 @@ def ema9_vwap_pullback(df):
     return _fresh(up & tagged & _after(df, 10, 0) & (df["Close"] > df["EMA9"]))
 
 
+def _bollinger(df, bars: int):
+    """Session-scoped Bollinger mid/sd. Grouping by session matters: an
+    un-grouped window makes a session's first bars use a band built entirely
+    from yesterday, which turns the squeeze into an overnight-gap detector."""
+    s = session(df)
+    grp = df["Close"].groupby(s)
+    mid = grp.transform(lambda x: x.rolling(bars, min_periods=bars).mean())
+    sd = grp.transform(lambda x: x.rolling(bars, min_periods=bars).std())
+    return mid, sd
+
+
 def _bb_width(df, bars=config.SQUEEZE_BARS) -> pd.Series:
     """Bollinger band width (2 sigma, as a fraction of the mid)."""
-    mid = df["Close"].rolling(bars, min_periods=bars).mean()
-    sd = df["Close"].rolling(bars, min_periods=bars).std()
+    mid, sd = _bollinger(df, bars)
     return (4 * sd) / mid
 
 
 def squeeze_breakout(df, bars=config.SQUEEZE_BARS, pctile=config.SQUEEZE_PCTILE):
-    """Volatility contraction then expansion: Bollinger width in the bottom
-    quartile of its own trailing distribution, and the close breaks the upper
-    band. The width baseline is shifted so the breakout bar never ranks itself."""
-    width = _bb_width(df, bars)
-    rank = width.shift(1).rolling(bars * 3, min_periods=bars).rank(pct=True)
-    mid = df["Close"].rolling(bars, min_periods=bars).mean()
-    sd = df["Close"].rolling(bars, min_periods=bars).std()
-    upper = (mid + 2 * sd).shift(1)          # prior bar's band, so the break is a break
+    """Volatility contraction then expansion: band width in the bottom quartile
+    of THIS SESSION's widths so far, then the close breaks the prior bar's upper
+    band.
+
+    Everything is session-scoped, which buys two things: the band can never be
+    yesterday's (see _bollinger), and an expanding within-session rank is
+    parity-safe by construction -- live and backtest both always hold the whole
+    session up to as_of, so they rank identically without needing a fixed window.
+    """
+    s = session(df)
+    mid, sd = _bollinger(df, bars)
+    width = (4 * sd) / mid
+    # shift(1): the coil must precede the break, and the breakout bar (whose own
+    # width is already expanding) never ranks itself
+    rank = width.groupby(s).transform(lambda x: x.shift(1).expanding().rank(pct=True))
+    upper = (mid + 2 * sd).groupby(s).shift(1)
     return _fresh((rank <= pctile) & (df["Close"] > upper))
 
 
 def momentum_thrust(df, bars=config.THRUST_BARS):
     """N consecutive higher closes, all above VWAP, on expanding range --
     catches opening drives that never pull back for the other setups."""
+    s = session(df)
     higher = df["Close"] > df["Close"].shift(1)
     streak = higher.rolling(bars, min_periods=bars).sum() == bars
     above = (df["Close"] > df["VWAP"]).rolling(bars, min_periods=bars).sum() == bars
     rng = df["High"] - df["Low"]
-    expanding = rng > rng.shift(1).rolling(20, min_periods=10).median()
+    # within-session baseline: parity-safe, and an overnight gap never sets the bar
+    typical = rng.groupby(s).transform(lambda x: x.shift(1).expanding().median())
     # bar_n guard keeps the streak inside the session (no overnight carry)
-    return _fresh(streak & above & expanding & (_bar_n(df) >= bars))
+    return _fresh(streak & above & (rng > typical) & (_bar_n(df) >= bars))
 
 
 # ---------------------------------------------------------------- stops
@@ -168,13 +188,13 @@ def _pullback_stop(df) -> float:
     return float(_today(df)["Low"].iloc[-3:].min())
 
 
-def _squeeze_stop(df) -> float:
+def _squeeze_stop(df, bars=config.SQUEEZE_BARS) -> float:
     # today's coil only -- a stop reaching into yesterday is a different trade
-    return float(_today(df)["Low"].iloc[-config.SQUEEZE_BARS:].min())
+    return float(_today(df)["Low"].iloc[-bars:].min())
 
 
-def _thrust_stop(df) -> float:
-    return float(_today(df)["Low"].iloc[-config.THRUST_BARS:].min())
+def _thrust_stop(df, bars=config.THRUST_BARS) -> float:
+    return float(_today(df)["Low"].iloc[-bars:].min())
 
 
 # ---------------------------------------------------------------- context
@@ -205,12 +225,12 @@ def _pullback_context(df) -> str:
     return f"EMA9 {df['EMA9'].iloc[-1]:.2f}"
 
 
-def _squeeze_context(df) -> str:
-    return f"band width {_bb_width(df).iloc[-1]:.2%}"
+def _squeeze_context(df, bars=config.SQUEEZE_BARS) -> str:
+    return f"band width {_bb_width(df, bars).iloc[-1]:.2%}"
 
 
-def _thrust_context(df) -> str:
-    t = df["Close"].iloc[-1] / df["Close"].iloc[-config.THRUST_BARS - 1] - 1
+def _thrust_context(df, bars=config.THRUST_BARS) -> str:
+    t = df["Close"].iloc[-1] / df["Close"].iloc[-bars - 1] - 1
     return f"thrust +{t:.2%}"
 
 

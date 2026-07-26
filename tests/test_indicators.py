@@ -45,11 +45,10 @@ def test_rvol_is_ratio_to_prior_sessions_same_slot():
     # 4 sessions x 2 slots; slot 0 volumes 100,200,300,400
     vols = [100.0, 50.0, 200.0, 50.0, 300.0, 50.0, 400.0, 50.0]
     df = make_bars([10.0] * 8, volumes=vols, sessions=4, per_session=2)
-    r = rvol_tod(df, min_samples=1)
-    assert np.isnan(r.iloc[0])                       # no prior session
-    assert r.iloc[2] == pytest.approx(200 / 100)
-    assert r.iloc[4] == pytest.approx(300 / 150)     # mean(100,200)
-    assert r.iloc[6] == pytest.approx(400 / 200)     # mean(100,200,300)
+    r = rvol_tod(df, lookback=2)
+    assert np.isnan(r.iloc[0]) and np.isnan(r.iloc[2])   # 0 and 1 priors: short window
+    assert r.iloc[4] == pytest.approx(300 / 150)         # mean(100,200)
+    assert r.iloc[6] == pytest.approx(400 / 250)         # mean(200,300): 100 aged out
 
 
 def test_rvol_is_independent_of_how_much_history_was_loaded():
@@ -58,24 +57,27 @@ def test_rvol_is_independent_of_how_much_history_was_loaded():
     an expanding mean would not, and the 2.0 gate would silently disagree."""
     vols = [100.0 * (i + 1) for i in range(20)]
     df = make_bars([10.0] * 20, volumes=vols, sessions=20, per_session=1)
-    full = rvol_tod(df, min_samples=3, lookback=5)
-    recent = rvol_tod(df.iloc[-8:], min_samples=3, lookback=5)
+    full = rvol_tod(df, lookback=5)
+    recent = rvol_tod(df.iloc[-8:], lookback=5)
     pd.testing.assert_series_equal(full.iloc[-3:], recent.iloc[-3:])
 
 
 def test_rvol_baseline_window_is_bounded():
     vols = [100.0] * 10 + [1000.0]      # ancient bars must fall out of the window
     df = make_bars([10.0] * 11, volumes=vols, sessions=11, per_session=1)
-    r = rvol_tod(df, min_samples=3, lookback=3)
+    r = rvol_tod(df, lookback=3)
     assert r.iloc[-1] == pytest.approx(1000 / 100)   # last 3 priors only
 
 
-def test_rvol_requires_min_samples():
+def test_rvol_needs_a_full_window_and_fails_safe_when_short():
+    """A partial window returns a DIFFERENT number depending on how much history
+    the caller loaded. NaN (no alert) is the safe answer; a wrong ratio against
+    the hard 2.0 gate is not."""
     vols = [100.0, 200.0, 300.0, 400.0]
     df = make_bars([10.0] * 4, volumes=vols, sessions=4, per_session=1)
-    r = rvol_tod(df, min_samples=3)
+    r = rvol_tod(df, lookback=3)
     assert np.isnan(r.iloc[1]) and np.isnan(r.iloc[2])   # 1 and 2 priors: not enough
-    assert r.iloc[3] == pytest.approx(400 / 200)         # 3 priors: trusted
+    assert r.iloc[3] == pytest.approx(400 / 200)         # exactly 3 priors: trusted
 
 
 def test_ema_matches_known_recursion():

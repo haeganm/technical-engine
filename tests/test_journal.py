@@ -26,7 +26,7 @@ def _bars(rows):
 
 
 def test_same_bar_1r_and_stop_is_ambiguous_not_a_loss():
-    """~22% of resolved setups hit both inside one 5m bar. Intrabar order is
+    """When both levels print inside one 5m bar the intrabar order is
     unknowable at this resolution, so it gets its own bucket."""
     journal.append([_alert()])
     bars = _bars([("10:05", 101.5, 98.5, 100.0)])   # both touched, same bar

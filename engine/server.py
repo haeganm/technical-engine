@@ -40,10 +40,26 @@ def _clean_nan(obj):
     return obj
 
 
-@lru_cache(maxsize=8)
-def _scored(source: str) -> pd.DataFrame:
+def _mtimes(source: str) -> tuple:
+    """Cache key: scoring depends on both parquet files, so a new backtest or a
+    new live alert must invalidate it. Without this the dashboard serves a
+    frozen snapshot for its whole lifetime while the header count moves."""
+    s = SOURCES[source]
+    out = []
+    for name in (s["journal"], s["store"]):
+        p = data._path(name)
+        out.append(p.stat().st_mtime_ns if p.exists() else 0)
+    return tuple(out)
+
+
+@lru_cache(maxsize=16)
+def _scored_cached(source: str, _key: tuple) -> pd.DataFrame:
     s = SOURCES[source]
     return journal.score_alerts(s["journal"], bars=data.load(s["store"]))
+
+
+def _scored(source: str) -> pd.DataFrame:
+    return _scored_cached(source, _mtimes(source))
 
 
 def api_meta() -> dict:
@@ -67,7 +83,6 @@ def api_summary(source: str) -> dict:
     scored = _scored(source)
     if scored.empty:
         return {"error": "no alerts in this source yet"}
-    bars_df = data.load(s["store"])
 
     decided = scored[scored["outcome"].isin(["one_r", "stop", "ambiguous"])]
     wins = int((decided["outcome"] == "one_r").sum())
@@ -79,12 +94,13 @@ def api_summary(source: str) -> dict:
     cum = by_day.cumsum()
     n_splits = 4 if sessions >= 80 else 2
 
+    # reuse the single scored pass -- re-deriving it per table cost ~33s each
     def table(by):
-        df = journal.stats(s["journal"], by=by, bars=bars_df)
+        df = journal.stats(s["journal"], by=by, scored=scored)
         return df.to_dict("records") if not df.empty else []
 
     def stab(by):
-        df = journal.stability(s["journal"], by=by, n_splits=n_splits, bars=bars_df)
+        df = journal.stability(s["journal"], by=by, n_splits=n_splits, scored=scored)
         return df.to_dict("records") if not df.empty else []
 
     return _clean_nan({
@@ -151,22 +167,30 @@ def api_bars(source: str, ticker: str, date: str) -> dict:
 
     j = data.load(s["journal"])
     row = j[(j["ticker"] == ticker) & (j["session_date"] == date)]
-    alert = None
+    alert = alert_ts = None
     if not row.empty:
         r = row.iloc[0]
-        alert = {"ts": pd.Timestamp(r["ts"]).isoformat(), "price": r["price"],
+        alert_ts = pd.Timestamp(r["ts"]).tz_convert(config.ET)
+        alert = {"ts": alert_ts.isoformat(), "price": r["price"],
                  "stop": r["stop"], "target_1r": r["target_1r"],
                  "target_2r": r["target_2r"], "signals": r["signals"],
                  "score": int(r["score"])}
+    # lightweight-charts reads epoch `time` as UTC, but traders read these charts
+    # in market time -- and the alerts table beside it renders ET. Shift by the
+    # bar's own UTC offset so 10:05 ET plots at 10:05 (DST-correct per bar).
+    def et_epoch(ts) -> int:
+        return int(ts.timestamp() + ts.utcoffset().total_seconds())
+
     return _clean_nan({
         "ticker": ticker,
-        "bars": [{"time": int(ts.timestamp()), "open": float(r["Open"]),
+        "bars": [{"time": et_epoch(ts), "open": float(r["Open"]),
                   "high": float(r["High"]), "low": float(r["Low"]),
                   "close": float(r["Close"]), "volume": float(r["Volume"])}
                  for ts, r in df.iterrows()],
-        "vwap": [{"time": int(ts.timestamp()), "value": float(v)}
+        "vwap": [{"time": et_epoch(ts), "value": float(v)}
                  for ts, v in df["VWAP"].items() if np.isfinite(v)],
         "alert": alert,
+        "alertTime": et_epoch(alert_ts) if alert else None,
     })
 
 
@@ -217,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = 8765):
-    _scored.cache_clear()
+    _scored_cached.cache_clear()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     log.info("dashboard at http://localhost:%d  (Ctrl+C to stop)", port)
     try:

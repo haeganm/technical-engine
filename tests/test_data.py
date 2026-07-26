@@ -21,13 +21,36 @@ def test_store_round_trip(frames):
         pd.testing.assert_frame_equal(back[t], small[t], check_freq=False)
 
 
-def test_store_prunes_beyond_keep_days(frames):
+def test_live_keep_days_never_prunes_the_archive():
+    """Regression: `store_bars(frames)` bare took a 60-day default while the 5m
+    profile said 3650, so the first live cycle deleted 19 irreplaceable sessions.
+    The profile is now the single source of truth."""
+    assert config.KEEP_DAYS == config.INTERVALS["5m"]["keep_days"] == 3650
+    assert config.ORB_BARS == config.INTERVALS["5m"]["orb_bars"]
+    assert config.PREV_SESSION_MIN_BARS == config.INTERVALS["5m"]["prev_session_min_bars"]
+
+
+def test_store_prunes_only_beyond_the_profile_window(frames):
     now = pd.Timestamp("2026-07-24 16:00", tz=config.ET)
     data.store_bars(frames, now=now)
     before = data.store_sessions()
-    # advance the clock so the fixture sessions fall outside KEEP_DAYS
-    data.store_bars({}, now=now + pd.Timedelta(days=config.KEEP_DAYS + 1))
-    assert before > 0 and data.store_sessions() == 0
+    assert before > 0
+    # a year later the fixture is still inside the 3650-day window
+    data.store_bars(frames, now=now + pd.Timedelta(days=365))
+    assert data.store_sessions() == before
+    # only an absurd horizon prunes it
+    data.store_bars(frames, now=now + pd.Timedelta(days=config.KEEP_DAYS + 1))
+    assert data.store_sessions() == 0
+
+
+def test_empty_fetch_does_not_rewrite_or_prune(frames):
+    """During an outage the archive must not erode: an empty fetch is a no-op."""
+    now = pd.Timestamp("2026-07-24 16:00", tz=config.ET)
+    n = data.store_bars(frames, now=now)
+    sessions = data.store_sessions()
+    # far past the retention horizon, but with nothing new there is nothing to do
+    assert data.store_bars({}, now=now + pd.Timedelta(days=99999)) == n
+    assert data.store_sessions() == sessions
 
 
 def test_load_frames_since_bounds_live_history(frames):

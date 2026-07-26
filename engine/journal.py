@@ -6,8 +6,10 @@ bars that actually printed. Two deliberate honesty rules:
 
   * When 1R and the stop are both hit inside the SAME 5-minute bar, the order
     is unknowable at this resolution. That is its own `ambiguous` outcome --
-    booking it as a loss (or a win) would be inventing a fact. Roughly a fifth
-    of resolved setups land here, so it is reported as a lo/hi band.
+    booking it as a loss (or a win) would be inventing a fact. It is reported
+    as a lo/hi band. (Rare now -- ~0.1% of resolved setups -- because the ATR
+    stop clamp means a single 5m bar seldom spans both levels. It was ~22%
+    before the clamp, and would return if the clamp were loosened.)
   * Alerts whose bars have aged out of the store stay in the frame as
     `unresolved` with a reason. They are never silently dropped from the
     denominator.
@@ -80,8 +82,11 @@ def score_alerts(name: str = LIVE, bars: pd.DataFrame | None = None) -> pd.DataF
         return out[cols]
 
     b = bars.copy()
-    # derive the session key ONCE -- rebuilding it per alert is quadratic
-    b["session_date"] = pd.DatetimeIndex(b["ts"]).tz_convert(config.ET).strftime("%Y-%m-%d")
+    # derive the session key ONCE -- rebuilding it per alert is quadratic.
+    # .astype(str) on the normalized dates is vectorized; .strftime() on a
+    # 2.4M-row DatetimeIndex is elementwise Python and cost ~17s here.
+    b["session_date"] = (pd.DatetimeIndex(b["ts"]).tz_convert(config.ET)
+                         .normalize().tz_localize(None).astype("datetime64[s]").astype(str))
     by_session = {k: g.sort_values("ts") for k, g in b.groupby(["ticker", "session_date"])}
     stored_sessions = set(b["session_date"])
 

@@ -28,7 +28,8 @@ def make_hourly(closes, highs=None, lows=None, volumes=None, sessions=1):
     }, index=pd.DatetimeIndex(idx))
 
 
-def _hourly_breakout(sessions=5):
+def _hourly_breakout(sessions=12):
+    # > RVOL_LOOKBACK_SESSIONS, else the RVOL baseline is NaN and nothing gates through
     """Final bar breaks the first-hour range on huge volume."""
     closes, vols = [], []
     for s in range(sessions):

@@ -56,7 +56,7 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
     return pv / v.replace(0, np.nan)
 
 
-def rvol_tod(df: pd.DataFrame, min_samples: int = config.RVOL_MIN_SAMPLES,
+def rvol_tod(df: pd.DataFrame,
              lookback: int = config.RVOL_LOOKBACK_SESSIONS) -> pd.Series:
     """Bar volume / mean volume of the SAME time-of-day slot on prior sessions.
 
@@ -71,6 +71,12 @@ def rvol_tod(df: pd.DataFrame, min_samples: int = config.RVOL_MIN_SAMPLES,
     """
     slot = pd.Series(df.index.strftime("%H:%M"), index=df.index)
     grp = df["Volume"].groupby(slot)
+    # min_periods == window, deliberately (so `window` also IS the minimum-sample
+    # rule). With min_periods < window a caller holding fewer than `window` prior
+    # sessions gets a DIFFERENT number for the same bar -- measured: 800 where the
+    # full frame says 500 -- and silently disagrees with the backtest across a hard
+    # gate. A full-window requirement makes a short slice yield NaN (no alert),
+    # which fails safe instead of failing wrong.
     baseline = grp.transform(
-        lambda x: x.shift(1).rolling(lookback, min_periods=min_samples).mean())
+        lambda x: x.shift(1).rolling(lookback, min_periods=lookback).mean())
     return df["Volume"] / baseline.replace(0, np.nan)

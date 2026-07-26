@@ -116,7 +116,12 @@ def fetch_intraday(tickers: list[str], interval: str = config.INTERVAL,
             frames[t] = df
     missing = len(tickers) - len(frames)
     if missing:
-        log.info("fetch: %d/%d tickers returned usable bars", len(frames), len(tickers))
+        # A large shortfall is the only visible symptom of Yahoo throttling,
+        # since yfinance turns per-ticker errors into empty frames and returns
+        # normally. Make it loud enough to find in the log.
+        level = logging.WARNING if len(frames) < len(tickers) * 0.9 else logging.INFO
+        log.log(level, "fetch: %d/%d tickers returned usable bars",
+                len(frames), len(tickers))
     return frames
 
 
@@ -124,6 +129,12 @@ def fetch_intraday(tickers: list[str], interval: str = config.INTERVAL,
 
 def store_bars(frames: dict[str, pd.DataFrame], now: pd.Timestamp | None = None,
                store: str = "bars", keep_days: int = config.KEEP_DAYS) -> int:
+    if not frames:
+        # Nothing to add. Rewriting here would re-apply the prune during an
+        # outage -- i.e. erode the archive fastest exactly when no new data
+        # is arriving. Report the existing size instead.
+        old = load(store)
+        return 0 if old is None else len(old)
     now = now if now is not None else pd.Timestamp.now(tz=config.ET)
     rows = []
     for t, df in frames.items():

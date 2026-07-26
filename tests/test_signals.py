@@ -1,4 +1,5 @@
 """Signal firing semantics."""
+import numpy as np
 import pandas as pd
 
 from engine import config
@@ -78,6 +79,39 @@ def test_momentum_thrust_needs_three_higher_closes_above_vwap():
     assert fires.iloc[-1]
     flat = enrich(make_bars([100.0] * 33, per_session=33))
     assert not REGISTRY["momentum_thrust"].fn(flat).any()
+
+
+def test_every_stop_is_a_real_price_below_the_close(frames):
+    """Regression: the ATR clamp forced r into [1,2.5]*ATR even when the raw r
+    was negative, so a wrong stop() was invisible to every invariant test.
+    Assert the RAW structural stop directly, before any clamping."""
+    df = enrich(next(iter(frames.values())))
+    for name, spec in REGISTRY.items():
+        stop = spec.stop(df)
+        assert isinstance(stop, float), name
+        assert np.isfinite(stop), name
+        assert stop > 0, name
+        assert stop <= df["Close"].iloc[-1], f"{name}: stop above the close is not a stop"
+        assert stop >= df["Low"].min(), f"{name}: stop below every low in the frame"
+
+
+def test_every_context_renders(frames):
+    df = enrich(next(iter(frames.values())))
+    for name, spec in REGISTRY.items():
+        s = spec.context(df)
+        assert isinstance(s, str) and s and "nan" not in s.lower(), name
+
+
+def test_squeeze_cannot_fire_on_a_sessions_first_bar():
+    """Regression: an un-grouped 20-bar Bollinger window made a session's first
+    bar use a band built entirely from yesterday, turning the squeeze into an
+    overnight-gap detector that bypassed all of gap_go's guards."""
+    calm = [100.0 + (0.02 if i % 2 else -0.02) for i in range(78)]
+    gap_open = [108.0] * 78                       # session 2 gaps up 8% and holds
+    df = enrich(make_bars(calm + gap_open, sessions=2, per_session=78))
+    fires = REGISTRY["squeeze_breakout"].fn(df)
+    first_bar_of_session_2 = 78
+    assert not fires.iloc[first_bar_of_session_2], "fired on the gap, not a coil"
 
 
 def test_signals_are_look_ahead_safe(frames):

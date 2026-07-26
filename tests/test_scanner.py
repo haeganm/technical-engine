@@ -7,7 +7,8 @@ from engine.scanner import scan_once
 from tests.conftest import make_bars
 
 
-def _breakout(or_low=99.95, sessions=5, per_session=12, spike=20000.0):
+def _breakout(or_low=99.95, sessions=12, per_session=12, spike=20000.0):
+    # sessions must exceed RVOL_LOOKBACK_SESSIONS or the baseline is NaN by design
     """Breaks its opening range on the FINAL bar (the one being judged).
 
     Prior sessions have a 1.0-wide range, so ATR ~= 1.0 and the clamp bounds
@@ -107,7 +108,7 @@ def test_market_down_withholds_the_regime_point():
     df = _breakout()
     n = len(df)
     spy_closes = [100.0] * (n - 1) + [90.0]   # SPY dumping under its VWAP
-    spy = make_bars(spy_closes, sessions=5, per_session=12)
+    spy = make_bars(spy_closes, sessions=12, per_session=12)
     with_spy = scanner.scan_once({"AAA": df, "SPY": spy}, df.index[-1], min_score=0)
     without = scanner.scan_once({"AAA": df}, df.index[-1], min_score=0)
     assert with_spy and without

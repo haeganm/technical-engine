@@ -218,7 +218,11 @@ async function openDetail(a) {
     vwap.setData(d.vwap);
 
     if (d.alert) {
-      const mark = { time: Math.floor(new Date(d.alert.ts).getTime() / 1000),
+      // bars are served on an ET-shifted epoch (see server.api_bars); the alert
+      // marker must use the same axis or it lands hours away from its candle
+      const alertBar = d.bars.reduce((best, b) =>
+        Math.abs(b.time - d.alertTime) < Math.abs(best.time - d.alertTime) ? b : best, d.bars[0]);
+      const mark = { time: alertBar.time,
                      position: "belowBar", color: COLORS.up, shape: "arrowUp", text: "BUY" };
       candles.setMarkers([mark]);
       const line = (price, title, color) => candles.createPriceLine({

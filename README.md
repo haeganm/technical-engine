@@ -104,7 +104,7 @@ python -m engine replay 2026-07-24          print one past session's alerts
 python -m engine report [--by score]        hit rates from the live journal
 python -m engine serve [--port 8765]        results dashboard at localhost:8765
 python -m engine test-webhook               post dummy alerts to Discord
-pytest                                      81 tests, offline, ~40s
+pytest                                      97 tests, offline, ~60s
 ```
 
 ## Dashboard
@@ -116,15 +116,17 @@ chart for every alert with VWAP and the entry/stop/1R/2R levels drawn on it.
 
 ## The two backtest tiers
 
-- **5m** (`backtest`) — the real system, full fidelity. yfinance caps 5m history
-  at ~60 days, so ~40 sessions is all that can exist for free.
+- **5m** (`backtest`) — the real system, full fidelity. yfinance only serves
+  ~60 days of 5m history, but the local store is **never pruned**, so the
+  sample grows past Yahoo's window every day the scanner runs.
 - **1h** (`backtest --interval 1h --days 200`) — the same signal *ideas* on
   hourly bars over 200 trading days. This is a **proxy for regime coverage**,
   not a measurement of the live 5m system: the opening range becomes the first
-  hour, the pullback EMA shortens to 4 bars, and hourly ATR stops are wide
-  enough that most trades end the day with neither target nor stop hit (small
-  "decided" counts). Measured result: win rates hug 50% there too, in every
-  quarter of the sample.
+  hour, the pullback EMA shortens to 4 bars, `squeeze_breakout` is disabled
+  outright (a 7-bar session cannot host a 20-bar coil), and hourly ATR stops
+  are wide enough that most trades end the day with neither target nor stop
+  hit (small "decided" counts). Measured result: win rates hug 50% there too,
+  in every quarter of the sample.
 
 `run --once --dry-run` is the useful one when the market is closed: it runs the
 exact live cycle against the last completed bar and prints what it *would* have
@@ -132,11 +134,19 @@ posted.
 
 ## Tuning
 
-- **Universe**: `engine/nasdaq100.txt`, one ticker per line. Dots become dashes
-  automatically (`BRK.B` → `BRK-B`).
+- **Universe**: `engine/sp500.txt` + `engine/nasdaq100.txt`, one ticker per
+  line, merged and deduped by `config.universe()`. Dots become dashes
+  automatically (`BRK.B` → `BRK-B`). A few valid index members are commented
+  out because Yahoo serves no intraday bars for them. `config.EXTRA_TICKERS`
+  (SPY) is fetched for market context and never alerts.
 - **Thresholds**: all of them live in `engine/config.py` — gates, score
   components, stop clamps, cadence, retention. Change one, rerun `backtest`,
   and read the stability table before believing the result.
+- **Interval profiles** (`config.INTERVALS`) are the single source of truth for
+  anything that differs between the live 5m system and the 1h backtest tier.
+  The module-level constants are derived from the 5m profile — never hand-set
+  them. A divergence here once silently deleted 19 sessions of irreplaceable
+  history.
 
 ## Design notes
 

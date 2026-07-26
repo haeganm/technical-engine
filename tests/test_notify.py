@@ -106,6 +106,31 @@ def test_post_close_never_posts_to_discord(monkeypatch):
     main_mod._post_close(["AAPL"])
 
 
+def test_open_status_respects_dry_run_and_the_config_switch(monkeypatch):
+    """The morning heartbeat is the only non-alert post left; it must be
+    suppressible and must never fire in a dry run."""
+    from engine import __main__ as main_mod
+    from engine import config, data
+
+    monkeypatch.setattr(data, "store_sessions", lambda *a, **k: 42)
+    posted = []
+    monkeypatch.setattr(notify, "post", lambda payload, url, **k: posted.append(payload) or True)
+
+    main_mod._post_open_status(None, ["AAPL"], dry_run=True)
+    assert posted == [], "dry run must not post"
+    main_mod._post_open_status("http://x", ["AAPL"], dry_run=True)
+    assert posted == [], "dry run must not post even with a url"
+
+    monkeypatch.setattr(config, "POST_OPEN_STATUS", False)
+    main_mod._post_open_status("http://x", ["AAPL"], dry_run=False)
+    assert posted == [], "config switch must suppress it"
+
+    monkeypatch.setattr(config, "POST_OPEN_STATUS", True)
+    main_mod._post_open_status("http://x", ["AAPL"], dry_run=False)
+    assert len(posted) == 1
+    assert "1 tickers" in json_dump(posted[0]) or "Watching" in json_dump(posted[0])
+
+
 def test_status_embed_is_neutral():
     e = notify.status_embed("Scanner online", ["watching 591 tickers"])
     assert e["color"] == notify.GREY
