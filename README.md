@@ -2,63 +2,130 @@
 
 A free, always-on intraday scanner for US equities. Every 5 minutes during
 market hours it pulls 5-minute bars for the Nasdaq-100, checks five classic
-day-trading long setups, and posts high-confidence **BUY NOW** alerts to a
-Discord channel — with entry, stop, and 1R/2R targets. Every alert is journaled
-and scored against what the market actually did, so the channel's hit rate is
-measurable, not vibes.
+day-trading long setups, and posts BUY-NOW alerts to a Discord channel with
+price, stop, and 1R/2R targets. Every alert is journaled and scored against
+what the market actually did.
 
-**This is not financial advice. Signals are mechanical patterns, not
-predictions. Day trading is risky; most day traders lose money.**
+**This is not financial advice, and it is not a profitable system.** See
+[Does it work?](#does-it-work) — the honest answer, measured over 41 sessions,
+is *no demonstrated edge*. The engine is built to measure that truthfully
+rather than to hide it. Day trading is risky; most day traders lose money.
+
+## Does it work?
+
+Run `python -m engine backtest` yourself. Over 41 sessions (2026-05-27 to
+2026-07-24), 869 alerts, ~21/day:
+
+| signal | decided | win rate | first half | second half |
+|---|---|---|---|---|
+| vwap_reclaim | 230 | 53.9% | 59.0% | 46.2% |
+| orb_breakout | 196 | 52.0% | 59.3% | 43.2% |
+| ema9_vwap_pullback | 202 | 42.1% | 43.9% | 40.5% |
+| hod_breakout | 141 | 39.7% | 38.5% | 41.3% |
+| gap_go | 16 | n<20 | — | — |
+
+At 1:1 reward:risk you need to win **more than 50% plus costs** to break even.
+Two signals are clearly below that. The two that look acceptable overall fall
+apart in the second half of the sample — and the highest-confidence bucket
+(score 4) swings from 73.7% to 42.5% between halves. That is a signal tracking
+the market regime, not an edge. Tuning the threshold to the good half is
+exactly how a backtest lies to you, which is why `backtest` prints the
+stability table underneath every other number.
+
+Treat the alerts as *"go look at this chart now"*, never as trade instructions.
 
 ## Signals (long only)
 
-| Signal | Idea |
+| Signal | Structure |
 |---|---|
-| `orb_breakout` | First close above the 30-min opening range on ≥2x volume |
+| `orb_breakout` | First close above the 30-minute opening-range high |
 | `vwap_reclaim` | Close crosses back above VWAP after ≥3 bars below |
-| `hod_breakout` | New high-of-day after 10:00 ET on elevated volume |
-| `gap_go` | ≥2% gap up that holds and breaks the first bar's high |
+| `hod_breakout` | Close above the prior high-of-day, after 10:00 ET |
+| `gap_go` | ≥2% gap up that holds its open and breaks the first bar's high |
 | `ema9_vwap_pullback` | Uptrend pullback tags EMA9, holds VWAP, bounces |
 
-An alert only fires when the ticker also passes the confluence gate: time-of-day
-relative volume in the top 15% of the universe **and** ≥2x its own normal,
-price above VWAP, and up on the day. One alert per ticker per session.
+Signals describe **structure only**. Every alert must additionally clear a
+central gate — relative volume ≥2× its own time-of-day normal, and price above
+VWAP — and score at least 2 of 4 confirmations:
+
+- up on the day
+- RVOL ≥ 3×
+- closed in the top 40% of the bar's range
+- more than one signal firing on the same bar
+
+Stops come from the setup's structure, then are clamped to between 1.0 and 2.5
+ATR — raw structural stops ranged from 0.09% (noise) to 5.6% (not a day trade).
+One alert per ticker per session.
 
 ## Setup
 
-Requires Python 3.12+ and a Discord webhook
-(Server Settings → Integrations → Webhooks → New Webhook → Copy URL).
+Requires Python 3.12+ and a Discord webhook (Server Settings → Integrations →
+Webhooks → New Webhook → Copy URL).
 
-```
+```bat
 py -3.12 -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-copy .env.example .env      # then paste your webhook URL into .env
+.venv\Scripts\pip install -e ".[dev]"
+copy .env.example .env         :: paste your webhook URL into .env
+.venv\Scripts\python -m engine fetch --period 60d
 .venv\Scripts\python -m engine test-webhook
 ```
 
+The `fetch --period 60d` step is not optional. Relative volume is measured
+against prior sessions at the same time of day, so **a fresh clone with an
+empty store produces zero alerts** until it has more than 3 sessions of
+history. That is by design, not a bug.
+
 ## Run
 
-```
-run.bat                     # scan loop + auto-restart on crash
+```bat
+run.bat
 ```
 
-Or directly: `python -m engine run`. Outside market hours it just sleeps.
+Loops during market hours, sleeps otherwise, restarts on crash, and stops on a
+configuration error. Or run it directly with `python -m engine run`.
 
-## Other commands
+## Commands
 
 ```
-python -m engine fetch              # one-off: seed/refresh the local bar store
-python -m engine replay 2026-07-24  # dry-run a past session (no Discord posts)
-python -m engine report             # per-signal hit rates from the alert journal
-pytest                              # leakage, end-to-end, dedupe tests
+python -m engine run [--once] [--dry-run]   scan loop; --dry-run never posts
+python -m engine fetch [--period 60d]       refresh the local bar store
+python -m engine backtest [--days N]        score every stored session
+python -m engine replay 2026-07-24          print one past session's alerts
+python -m engine report [--by score]        hit rates from the live journal
+python -m engine test-webhook               post dummy alerts to Discord
+pytest                                      69 tests, offline, ~35s
 ```
+
+`run --once --dry-run` is the useful one when the market is closed: it runs the
+exact live cycle against the last completed bar and prints what it *would* have
+posted.
+
+## Tuning
+
+- **Universe**: `engine/nasdaq100.txt`, one ticker per line. Dots become dashes
+  automatically (`BRK.B` → `BRK-B`).
+- **Thresholds**: all of them live in `engine/config.py` — gates, score
+  components, stop clamps, cadence, retention. Change one, rerun `backtest`,
+  and read the stability table before believing the result.
 
 ## Design notes
 
-- $0 stack: yfinance 5m bars (slightly delayed — this scans for setups, it is
-  not an execution feed), parquet storage, plain webhook POSTs. No API keys
-  except your own webhook URL, which lives only in `.env` (gitignored).
+- $0 stack: yfinance 5-minute bars, parquet storage, plain webhook POSTs. The
+  only secret is your webhook URL, which lives in `.env` (gitignored). If it
+  leaks, anyone can post to your channel — delete the webhook in Discord and
+  make a new one; there is no key to rotate.
+- Yahoo intraday data is delayed, often by 15 minutes, and labels bars by
+  interval *start*. The engine only ever judges bars whose interval has fully
+  elapsed. This is a setup scanner, not an execution feed.
 - Rule-based on purpose. No ML: honest walk-forward evaluation in a sibling
-  project showed intraday ML edge barely beats a coin flip. The journal
-  (`engine report`) is the arbiter of whether these signals earn their pings.
-- All signals are vectorized and look-ahead-safe (enforced by tests).
+  project showed intraday ML barely beating a coin flip, and as the backtest
+  above shows, the rules don't beat one either.
+- Signal functions and indicators are look-ahead-safe, enforced two ways: each
+  signal is truncated and recomputed bar by bar, and the whole scan is checked
+  to produce identical output whether or not future bars are present. That
+  causality is also what lets the backtest precompute each ticker once — 41
+  sessions score in ~50 seconds instead of 2.3 hours.
+- Outcomes are 5-minute-bar approximations. When 1R and the stop are both
+  touched inside one bar, the order is unknowable at this resolution, so it is
+  reported as its own `ambiguous` bucket rather than silently booked as a loss.
+  No fills, slippage, or commissions are modeled.

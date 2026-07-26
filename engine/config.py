@@ -2,6 +2,10 @@
 
 Every path is derived from this file's location so the repo is portable and
 safe to share -- nothing user-specific is ever committed.
+
+This module is the single source of truth for every tunable. Signal functions
+take their thresholds as keyword arguments defaulting to these constants, so
+tests can vary them without touching globals.
 """
 import os
 from datetime import time
@@ -16,16 +20,42 @@ ET = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 
+# ---------------------------------------------------------------- data
 INTERVAL = "5m"
-PERIOD = "5d"          # backfill window per fetch; grows local store to ~10 sessions
+PERIOD = "5d"          # incremental fetch window; use `fetch --period 60d` to backfill
 BAR_MINUTES = 5
-WAKE_LAG_S = 40        # scan ~40s after each 5m boundary so the closed bar is in
-KEEP_DAYS = 15         # prune bars store beyond this
-STALE_BAR_MIN = 20     # skip a ticker if its last bar is older than this
+# Yahoo labels bars by interval START, so a bar is only complete at ts+BAR_MINUTES.
+# We wake a full minute past the boundary to give Yahoo time to publish it.
+WAKE_LAG_S = 60
+KEEP_DAYS = 60         # yfinance caps 5m history at ~60d => ~40 sessions
+MIN_BARS = 20          # skip tickers with fewer usable bars
 
-RVOL_MIN_PCTILE = 0.85  # universe-relative time-of-day RVOL gate ("high confidence")
-RVOL_MIN_ABS = 2.0      # absolute RVOL floor -- percentile alone passes on quiet tapes
-MIN_BARS = 20           # skip tickers with fewer usable bars
+# ---------------------------------------------------------------- gates
+RVOL_MIN_ABS = 2.0      # hard gate: bar volume vs its own time-of-day normal
+RVOL_MIN_SAMPLES = 3    # prior same-slot observations required before RVOL is trusted
+STRONG_RVOL = 3.0       # score point: exceptional volume
+STRONG_CLOSE = 0.6      # score point: closed in the top 40% of the bar's range
+MIN_SCORE = 2           # of 4 possible points -- tune with `backtest --min-score`
+
+# ---------------------------------------------------------------- risk
+MIN_STOP_ATR = 1.0      # clamp: a stop tighter than 1 ATR is noise
+MAX_STOP_ATR = 2.5      # clamp: a stop wider than 2.5 ATR is not a day trade
+ATR_PERIOD = 14
+
+# ---------------------------------------------------------------- signals
+ORB_BARS = 6                 # 30-minute opening range on 5m bars
+RECLAIM_BELOW_BARS = 3
+GAP_MIN = 0.02
+PREV_SESSION_MIN_BARS = 60   # of 78; below this the prior session is too partial to trust
+
+# ---------------------------------------------------------------- discord
+EMBEDS_PER_MSG = 10     # Discord's hard limit
+POST_GAP_S = 1.1        # stay inside ~5 requests / 2s
+HTTP_TIMEOUT_S = 10
+
+# ---------------------------------------------------------------- logging
+LOG_MAX_BYTES = 5_000_000
+LOG_BACKUPS = 3
 
 
 def env(key: str) -> str | None:
@@ -34,8 +64,10 @@ def env(key: str) -> str | None:
         return os.environ[key]
     p = ROOT / ".env"
     if p.exists():
-        for line in p.read_text().splitlines():
+        for line in p.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 if k.strip() == key:

@@ -1,6 +1,10 @@
-.env
+# Secrets: match every .env variant, keep only the template
+.env*
+!.env.example
+
 .venv/
 __pycache__/
 data/
 *.pyc
 .pytest_cache/
+.ruff_cache/
