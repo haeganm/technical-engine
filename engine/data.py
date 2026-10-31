@@ -36,6 +36,11 @@ def save(name: str, df: pd.DataFrame):
     # pid-unique temp: two engine processes must not share a scratch file
     tmp = _path(name).with_suffix(f".tmp{os.getpid()}")
     df.to_parquet(tmp, index=False)
+    # Flush to disk before the rename. Without it, a sleep or power cut right after
+    # os.replace left bars.parquet as 76 MB of zeros (2026-10-05) and every later
+    # start crashed reading it.
+    with open(tmp, "rb+") as f:
+        os.fsync(f.fileno())
     try:
         os.replace(tmp, _path(name))
     except PermissionError as e:

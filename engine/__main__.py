@@ -383,6 +383,16 @@ def main(argv=None) -> None:
 
     a = p.parse_args(argv)
     setup_logging(a.verbose)
+    try:
+        _dispatch(a)
+    except Exception:
+        # The scheduled task runs under pythonw, which discards stderr; without this
+        # a startup crash leaves no trace (it hid a corrupt store for 25 days).
+        log.exception("fatal: %s exited on an unhandled error", a.cmd)
+        raise
+
+
+def _dispatch(a) -> None:
     if a.cmd == "run":
         cmd_run(once=a.once, dry_run=a.dry_run)
     elif a.cmd == "fetch":
