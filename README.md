@@ -1,5 +1,7 @@
 # TechnicalEngine
 
+[![CI](https://github.com/haeganm/technical-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/haeganm/technical-engine/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A free, always-on intraday scanner for US equities. Every 5 minutes during
 market hours it pulls 5-minute bars for the **S&P 500 + Nasdaq-100** (506
 tickers — the full Nasdaq exchange is ~3,400 names, which free Yahoo data
