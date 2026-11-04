@@ -4,17 +4,17 @@
 
 A free, always-on intraday scanner for US equities. Every 5 minutes during
 market hours it pulls 5-minute bars for the **S&P 500 + Nasdaq-100** (506
-tickers — the full Nasdaq exchange is ~3,400 names, which free Yahoo data
+tickers - the full Nasdaq exchange is ~3,400 names, which free Yahoo data
 cannot sustain at this cadence), checks five day-trading long setups, and
 posts BUY alerts to a Discord channel with price, stop, and 2R/3R targets.
 Every alert is journaled and scored against what the market actually did.
 
 The Discord channel is **buy-alerts only** (plus a morning "scanner online"
-heartbeat). Outcomes — including every loss — are tracked in the local
+heartbeat). Outcomes - including every loss - are tracked in the local
 dashboard (`engine serve`) and `engine report`, not posted to the channel.
 
 **This is not financial advice, and it is not a profitable system.** See
-[Does it work?](#does-it-work) — the honest answer, measured over 60 sessions,
+[Does it work?](#does-it-work) - the honest answer, measured over 60 sessions,
 is *no demonstrated edge*. The engine is built to measure that truthfully
 rather than to hide it. Day trading is risky; most day traders lose money.
 
@@ -22,14 +22,14 @@ rather than to hide it. Day trading is risky; most day traders lose money.
 
 No. Run `python -m engine backtest` yourself, or browse it in `python -m engine
 serve`. **The shipped configuration**, over 60 sessions of 5m bars across 506
-tickers (2026-04-29 to 2026-07-24) — 5,400 alerts. Expect a **median of 99
+tickers (2026-04-29 to 2026-07-24) - 5,400 alerts. Expect a **median of 99
 alerts per day** (mean 108, range 48–235; the backtest's headline 90/day is
 diluted by the first ~10 sessions, which produce nothing while the RVOL
 baseline fills). The busiest single 5-minute cycle observed was 127 alerts,
 which posts as 13 Discord messages over ~13 seconds:
 
 Targets are **2R**, so breakeven needs a win rate above **33.3%**. `exp_r` is
-expectancy in R — the only figure comparable across target settings, and the
+expectancy in R - the only figure comparable across target settings, and the
 one that has to be positive:
 
 | signal | decided | win rate | exp_r | first half | second half |
@@ -56,8 +56,8 @@ Overall: **−748R over 5,400 alerts** (−0.139R each; 30.8% win in the first h
   noise; selecting on it is exactly how a backtest lies to you, which is why
   `backtest` prints a stability table under every other number.
 
-Two signals — `hod_breakout` (46.7% / 44.5%) and `squeeze_breakout` (45.1% /
-42.0%) — were retired for being worst in *both* halves, the only non-overfit
+Two signals - `hod_breakout` (46.7% / 44.5%) and `squeeze_breakout` (45.1% /
+42.0%) - were retired for being worst in *both* halves, the only non-overfit
 criterion available. Fixing `squeeze_breakout`'s session-boundary bug made it
 measurably worse (47.6% → 43.7%): it had been scoring overnight gaps, not
 volatility coils.
@@ -65,7 +65,7 @@ volatility coils.
 `gap_go` is the one setup with **positive expectancy** (+0.030R) that also
 holds up across both halves (34.3% → 35.0%, the only signal that does not
 decay). At ~2 alerts/day and 107 decided trades it is far too thin to build on
-— interesting, not proven, and a single bad month would erase it. Everything
+ - interesting, not proven, and a single bad month would erase it. Everything
 else decays into the second half by 5–11 points, which is one regime effect
 rather than four independent failures.
 
@@ -81,13 +81,13 @@ Treat the alerts as *"go look at this chart now"*, never as trade instructions.
 | `ema9_vwap_pullback` | Uptrend pullback tags EMA9, holds VWAP, bounces |
 | `momentum_thrust` | 3 straight higher closes above VWAP on expanding range |
 
-Two more — `hod_breakout` and `squeeze_breakout` — are implemented and tested
+Two more - `hod_breakout` and `squeeze_breakout` - are implemented and tested
 but **retired**: they measured worst in both halves of the sample. Clear
 `config.INTERVALS["5m"]["disabled"]` to put them back under measurement.
 
 Signals describe **structure only**. Every alert must additionally clear a
-central gate — relative volume ≥2× its own time-of-day normal, and price above
-VWAP — and score enough of 6 confirmations (threshold in `config.MIN_SCORE`,
+central gate - relative volume ≥2× its own time-of-day normal, and price above
+VWAP - and score enough of 6 confirmations (threshold in `config.MIN_SCORE`,
 currently 4, chosen for ~100 alerts/day rather than for edge):
 
 - up on the day
@@ -98,7 +98,7 @@ currently 4, chosen for ~100 alerts/day rather than for edge):
 - relative-strength leader (day change beats SPY's)
 
 Stops come from the setup's structure, then are clamped to between 1.0 and 2.5
-ATR — raw structural stops ranged from 0.09% (noise) to 5.6% (not a day trade).
+ATR - raw structural stops ranged from 0.09% (noise) to 5.6% (not a day trade).
 One alert per ticker per session.
 
 ## Setup
@@ -116,7 +116,7 @@ copy .env.example .env         :: paste your webhook URL into .env
 
 The `fetch` step is not optional. Relative volume is measured against the same
 time of day on the previous 10 sessions, so **a fresh clone with an empty store
-produces zero alerts** until it has that much history — the baseline returns
+produces zero alerts** until it has that much history - the baseline returns
 NaN rather than a number computed from too few samples. That is by design: a
 partial window would give a different answer depending on how much history
 happened to be loaded. The default `fetch` pulls Yahoo's full ~60 days.
@@ -146,16 +146,16 @@ pytest                                      99 tests, offline, ~60s
 ## Dashboard
 
 `python -m engine serve` opens a local, read-only dashboard (no accounts, no
-external requests — the chart library is vendored): cumulative-R equity curve,
+external requests - the chart library is vendored): cumulative-R equity curve,
 win-rate tiles, per-signal and stability tables, and a click-through candlestick
 chart for every alert with VWAP and the entry/stop/target levels drawn on it.
 
 ## The two backtest tiers
 
-- **5m** (`backtest`) — the real system, full fidelity. yfinance only serves
+- **5m** (`backtest`) - the real system, full fidelity. yfinance only serves
   ~60 days of 5m history, but the local store is **never pruned**, so the
   sample grows past Yahoo's window every day the scanner runs.
-- **1h** (`backtest --interval 1h --days 200`) — the same signal *ideas* on
+- **1h** (`backtest --interval 1h --days 200`) - the same signal *ideas* on
   hourly bars over 200 trading days. This is a **proxy for regime coverage**,
   not a measurement of the live 5m system: the opening range becomes the first
   hour, the pullback EMA shortens to 4 bars, `squeeze_breakout` is disabled
@@ -175,12 +175,12 @@ posted.
   automatically (`BRK.B` → `BRK-B`). A few valid index members are commented
   out because Yahoo serves no intraday bars for them. `config.EXTRA_TICKERS`
   (SPY) is fetched for market context and never alerts.
-- **Thresholds**: all of them live in `engine/config.py` — gates, score
+- **Thresholds**: all of them live in `engine/config.py` - gates, score
   components, stop clamps, cadence, retention. Change one, rerun `backtest`,
   and read the stability table before believing the result.
 - **Interval profiles** (`config.INTERVALS`) are the single source of truth for
   anything that differs between the live 5m system and the 1h backtest tier.
-  The module-level constants are derived from the 5m profile — never hand-set
+  The module-level constants are derived from the 5m profile - never hand-set
   them. A divergence here once silently deleted 19 sessions of irreplaceable
   history.
 
@@ -188,7 +188,7 @@ posted.
 
 - $0 stack: yfinance 5-minute bars, parquet storage, plain webhook POSTs. The
   only secret is your webhook URL, which lives in `.env` (gitignored). If it
-  leaks, anyone can post to your channel — delete the webhook in Discord and
+  leaks, anyone can post to your channel - delete the webhook in Discord and
   make a new one; there is no key to rotate.
 - Yahoo intraday data is delayed, often by 15 minutes, and labels bars by
   interval *start*. The engine only ever judges bars whose interval has fully
@@ -199,7 +199,7 @@ posted.
 - Signal functions and indicators are look-ahead-safe, enforced two ways: each
   signal is truncated and recomputed bar by bar, and the whole scan is checked
   to produce identical output whether or not future bars are present. That
-  causality is also what lets the backtest precompute each ticker once — 41
+  causality is also what lets the backtest precompute each ticker once - 41
   sessions score in ~50 seconds instead of 2.3 hours.
 - Outcomes are 5-minute-bar approximations. When 1R and the stop are both
   touched inside one bar, the order is unknowable at this resolution, so it is
